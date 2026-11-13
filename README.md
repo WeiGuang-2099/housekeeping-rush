@@ -12,7 +12,7 @@ No reflexes are involved. You and the ghosts choose from the same set of actions
 
 ## Status
 
-Project scaffold only. The engine types, the tuning parameters and a few utilities are in place; the rules, the ghosts and the interface are not implemented yet. See `docs/TASKS.md`.
+Project scaffold only. The engine types, the tuning parameters and a few utilities are in place; the rules, the ghosts and the interface are not implemented yet.
 
 ## Getting started
 
@@ -25,10 +25,8 @@ npm run build
 
 Requires Node 20 or newer.
 
-## Documents
+## Prototype
 
-- `docs/DESIGN.md`: the full design (in Chinese)
-- `docs/TASKS.md`: the task list by phase
-- `prototype/`: a rough Python prototype used to sanity check the numbers
+`prototype/` holds a rough Python prototype used to sanity check the numbers.
 
 The hotel, its guests and its floor plan are fictional.
