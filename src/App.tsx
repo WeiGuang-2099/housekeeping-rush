@@ -17,7 +17,7 @@ export function App() {
       <h1>
         客房冲刺 <span className="en">Housekeeping Rush</span>
       </h1>
-      <p>项目骨架已就绪，引擎还没有实现。下一步见 docs/TASKS.md 的阶段 0。</p>
+      <p>项目骨架已就绪，引擎还没有实现。</p>
 
       <table>
         <thead>
