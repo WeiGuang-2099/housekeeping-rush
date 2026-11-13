@@ -23,7 +23,7 @@ npm test
 npm run build
 ```
 
-Requires Node 20 or newer.
+Requires Node 22.12 or newer.
 
 ## Prototype
 
