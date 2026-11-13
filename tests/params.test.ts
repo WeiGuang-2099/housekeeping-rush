@@ -49,6 +49,33 @@ describe.each(TIERS)('params：%s 档', (tier) => {
     for (const deadline of params.vipDeadlines) expect(deadline).toBeLessThan(hardStop);
   });
 
+  it('开工前的时刻是负整数，生成用到的时间窗都是不早于开工的非空整数区间', () => {
+    const { shift, checkout, stayClues, guests, dnd } = params;
+    expect(Number.isInteger(shift.beforeStart)).toBe(true);
+    expect(shift.beforeStart).toBeLessThan(0);
+    expect(Number.isInteger(checkout.lateCheckout.at)).toBe(true);
+    expect(checkout.lateCheckout.at).toBeGreaterThanOrEqual(0);
+
+    // 时间窗 [from, to) 左闭右开。出门时间窗要算上周末档的整体推迟。
+    const windows: [string, number, number][] = [
+      ['退房早段', checkout.early.from, checkout.early.to],
+      ['退房晚段', checkout.late.from, checkout.late.to],
+      ['摘牌', dnd.liftFrom, dnd.liftTo],
+      ...Object.entries(stayClues).map(
+        ([clue, { leaveFrom, leaveTo }]): [string, number, number] => [
+          `${clue} 出门`,
+          leaveFrom + guests.leaveDelay,
+          leaveTo + guests.leaveDelay,
+        ],
+      ),
+    ];
+    for (const [label, from, to] of windows) {
+      expect(Number.isInteger(from) && Number.isInteger(to), label).toBe(true);
+      expect(from, label).toBeGreaterThanOrEqual(0);
+      expect(to, label).toBeGreaterThan(from);
+    }
+  });
+
   it('贵宾房不多于退房房，布草车至少装得下一间退房房', () => {
     expect(params.vipDeadlines.length).toBeLessThanOrEqual(params.mix.departures);
     expect(params.cart.capacity).toBeGreaterThanOrEqual(params.rooms.departure.linen);

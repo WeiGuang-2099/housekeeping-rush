@@ -4,6 +4,8 @@
  * 这些是第一版的初始值，来自 docs/DESIGN.md，并用 prototype/sim.py 粗略试算过。
  * 正式引擎写好后要用批量模拟器重新调（见 docs/DESIGN.md 的"平衡与评测"）。
  * 时间单位是分钟，从 08:30 起算：120 是 10:30，270 是 13:00，450 是 16:00。
+ * 成对的时间窗（from 和 to、leaveFrom 和 leaveTo、liftFrom 和 liftTo）都是左闭右开的 [from, to)，
+ * generate 在里面等概率抽一个整数分钟。
  */
 
 import type { DepartureClue, MessLevel, Minute, Place, RoomId, StayClue } from './types';
@@ -24,6 +26,11 @@ export interface Params {
   tier: Tier;
 
   shift: {
+    /**
+     * 开工前的一个时刻，必须是负数。开工前就已退房、或客人开工前已出门的房间，
+     * 可进时刻（RoomTruth.availableFrom）记为它。具体取值不影响玩法，只要求早于开工。
+     */
+    beforeStart: Minute;
     /** 目标下班时间，16:00。 */
     targetFinish: Minute;
     /** 强制下班时间，17:00。 */
@@ -64,6 +71,7 @@ export interface Params {
 
   /** 退房时间分布，四项的 share 之和为 1。 */
   checkout: {
+    /** 开工前已退，可进时刻记为 shift.beforeStart。 */
     beforeStart: { share: number };
     early: { share: number; from: Minute; to: Minute };
     late: { share: number; from: Minute; to: Minute };
@@ -107,6 +115,7 @@ const STANDARD: Params = {
   tier: 'standard',
 
   shift: {
+    beforeStart: -30,
     targetFinish: 450,
     hardStop: 510,
     breakEarliest: 120,
