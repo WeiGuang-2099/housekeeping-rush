@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { allRooms } from '../src/engine/layout';
+import { SHIFT_START_OF_DAY, toClock } from '../src/engine/clock';
+import { allRooms, placeOf, walkMinutes } from '../src/engine/layout';
 import { PARAMS, tierForWeekday, type MessDistribution, type Tier } from '../src/engine/params';
+import { cleanMinutes } from '../src/engine/rules';
+import type { MessLevel, RoomKind } from '../src/engine/types';
 
 const TIERS: Tier[] = ['standard', 'tight', 'weekend'];
+const KINDS: RoomKind[] = ['departure', 'stayover', 'dnd'];
+const MESS_LEVELS: MessLevel[] = ['tidy', 'normal', 'disaster'];
 
 const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0);
 const messTotal = (mess: MessDistribution): number => mess.tidy + mess.normal + mess.disaster;
@@ -79,6 +84,95 @@ describe.each(TIERS)('params：%s 档', (tier) => {
   it('贵宾房不多于退房房，布草车至少装得下一间退房房', () => {
     expect(params.vipDeadlines.length).toBeLessThanOrEqual(params.mix.departures);
     expect(params.cart.capacity).toBeGreaterThanOrEqual(params.rooms.departure.linen);
+  });
+});
+
+describe.each(TIERS)('params 的时间：%s 档', (tier) => {
+  const params = PARAMS[tier];
+
+  it('各项动作耗时和步行时间都是正整数', () => {
+    const durations: [string, number][] = [
+      ['callMinutes', params.callMinutes],
+      ['knockRefusedMinutes', params.knockRefusedMinutes],
+      ['restockMinutes', params.cart.restockMinutes],
+      ['returnCartMinutes', params.shift.returnCartMinutes],
+      ['waitStepMinutes', params.waitStepMinutes],
+      ['breakMinutes', params.shift.breakMinutes],
+      ['walkMinutesPerDoor', params.layout.walkMinutesPerDoor],
+      ['liftMinutes', params.layout.liftMinutes],
+    ];
+    for (const [name, minutes] of durations) {
+      expect(Number.isInteger(minutes), name).toBe(true);
+      expect(minutes, name).toBeGreaterThan(0);
+    }
+  });
+
+  it('每种房型的基础时间乘最小的脏乱系数不小于 1', () => {
+    // 最小的系数是整洁的 0.8：退房房 30 × 0.8 = 24，续住房 15 × 0.8 = 12（请勿打扰房用续住房的）。
+    const smallest = Math.min(...MESS_LEVELS.map((mess) => params.messMultiplier[mess]));
+    expect(params.rooms.departure.baseMinutes * smallest).toBeGreaterThanOrEqual(1);
+    expect(params.rooms.stayover.baseMinutes * smallest).toBeGreaterThanOrEqual(1);
+    for (const kind of KINDS) {
+      for (const mess of MESS_LEVELS) expect(cleanMinutes(kind, mess, params), `${kind} ${mess}`).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('每种房型乘每档脏乱系数都得到整数分钟', () => {
+    for (const kind of KINDS) {
+      for (const mess of MESS_LEVELS) {
+        expect(() => cleanMinutes(kind, mess, params), `${kind} ${mess}`).not.toThrow();
+        expect(Number.isInteger(cleanMinutes(kind, mess, params)), `${kind} ${mess}`).toBe(true);
+      }
+    }
+  });
+
+  it('固定时刻都是整数分钟，回来时间的取整步长是正整数', () => {
+    // 引擎只用整数分钟，这些时刻和步长也都应当是整数。例如 hardStop 为 509.5 时，509 分钟的等待上限变成 0.5，
+    // 这时还有房间没做就什么都做不了。generate 不检查它们，三档参数由这里检查。
+    const { hardStop, breakEarliest, breakLatest, targetFinish } = params.shift;
+    const moments: [string, number][] = [
+      ['hardStop', hardStop],
+      ['breakEarliest', breakEarliest],
+      ['breakLatest', breakLatest],
+      ['targetFinish', targetFinish],
+      ...params.vipDeadlines.map((deadline, index): [string, number] => [`vipDeadlines[${index}]`, deadline]),
+    ];
+    for (const [name, minute] of moments) expect(Number.isInteger(minute), name).toBe(true);
+    expect(Number.isInteger(params.comeBackRounding), 'comeBackRounding').toBe(true);
+    expect(params.comeBackRounding, 'comeBackRounding').toBeGreaterThan(0);
+  });
+
+  it('开工时刻能被回来时间的取整步长整除，按开工后的分钟取整和按钟点取整一致', () => {
+    // 08:30 是当天第 510 分钟，510 = 34 × 15。
+    expect(SHIFT_START_OF_DAY % params.comeBackRounding).toBe(0);
+  });
+
+  it('最晚的强制休息也在 17:00 之前结束：按现有参数是 457（16:07）', () => {
+    const { breakLatest, breakMinutes, hardStop } = params.shift;
+    const service = params.layout.servicePoint;
+    const roomPlaces = allRooms(params).map((room) => placeOf(room, params));
+    // 人能停留的位置：服务间和各个房间门位。
+    const positions = [service, ...roomPlaces];
+    const max = (values: number[]): number => Math.max(...values);
+    // 任意位置到任意房间的最远步行：12 楼门位 4 到 13 楼门位 4，(4 + 4) × 1 + 4 = 12。
+    const farthestToRoom = max(positions.flatMap((from) => roomPlaces.map((to) => walkMinutes(from, to, params))));
+    // 回服务间的最远步行：13 楼门位 4，(4 + 0) × 1 + 4 = 8。
+    const farthestToService = max(positions.map((from) => walkMinutes(from, service, params)));
+    // 最长的打扫：灾难级退房房 30 × 1.6 = 48。
+    const longestClean = max(KINDS.flatMap((kind) => MESS_LEVELS.map((mess) => cleanMinutes(kind, mess, params))));
+    // 最长的单个非休息动作：max(12 + 48, 12 + 1, 8 + 5, 2, 5) = 60。
+    const longestAction = max([
+      farthestToRoom + longestClean,
+      farthestToRoom + params.knockRefusedMinutes,
+      farthestToService + params.cart.restockMinutes,
+      params.callMinutes,
+      params.waitStepMinutes,
+    ]);
+    // 14:29 开始最长的动作，做完再从最远处走回服务间休息：(360 - 1) + 60 + 8 + 30 = 457。
+    const latestBreakEnd = breakLatest - 1 + longestAction + farthestToService + breakMinutes;
+    expect(latestBreakEnd).toBeLessThan(hardStop);
+    expect(latestBreakEnd).toBe(457);
+    expect(toClock(latestBreakEnd)).toBe('16:07');
   });
 });
 

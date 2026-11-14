@@ -47,9 +47,8 @@ export interface RoomTruth {
   clue: Clue;
   mess: MessLevel;
   /**
-   * 最早可以进去打扫的时刻。
-   * 退房房：客人退房的时刻。续住房和请勿打扰房：客人出门的时刻。
-   * 负数表示开工前就已经可以进。
+   * 退房房是客人退房的时刻，续住房和请勿打扰房是客人出门的时刻；负数表示开工前就已经退房或出门；
+   * 请勿打扰房实际最早可进的时刻是 max(dndLiftsAt, availableFrom)，摘牌不等于客人已出门。
    */
   availableFrom: Minute;
   /** 延迟退房。这一项印在任务单上，玩家开工就知道。 */
@@ -88,6 +87,7 @@ export type Action =
   | { type: 'restock' }
   | { type: 'call' }
   | { type: 'break' }
+  /** minutes 是整数，1 <= minutes <= min(waitStepMinutes, hardStop - minute)；legalActions 只列上限这一个值。 */
   | { type: 'wait'; minutes: Minute }
   | { type: 'respond'; option: string }
   | { type: 'finish' };
@@ -98,16 +98,23 @@ export type Action =
 
 export interface RoomProgress {
   id: RoomId;
-  done: boolean;
-  /** 已经做掉的打扫分钟数，被打断后保留。 */
+  /** 打扫完成的时刻；没完成为 null。被 17:00 截断的房间也是 null。 */
+  doneAt: Minute | null;
+  /**
+   * 已经做掉的打扫分钟数。开门开始打扫时扣布草；完成时等于总时长。
+   * 17:00 截断（以及阶段 2 的打断）后保留已做的分钟数；续做耗时为总时长减它，续做时不再扣、也不再检查布草。
+   */
   workDone: Minute;
-  /** 退房房：主管是否已标记"已退"。 */
+  /** 退房房：主管是否已标记"已退"。只由打电话设置；其他房型恒为 false。 */
   flaggedDeparted: boolean;
-  /** 已知的最早可进时刻，比如客人告知的回来时间；null 表示还不知道。 */
+  /**
+   * 客人告知的回来时间（已向上取整）。有约束力：到达时刻早于它时，这间房不是合法的打扫目标。
+   * 只由敲门被拒写入（阶段 2 的淋浴声和"请稍后再来"也写它）；延迟退房不预填。null 表示没有这项限制。
+   */
   knownAvailableFrom: Minute | null;
-  /** 是否开过门，开过门才知道脏乱档位。 */
+  /** 是否开过门。开过门才知道脏乱档位。 */
   messRevealed: boolean;
-  /** 请勿打扰房：是否已得知摘牌。 */
+  /** 请勿打扰房：是否已得知摘牌（打电话，或路过、停留在该门位时看到）。为真之后才能作为打扫目标。 */
   dndLiftKnown: boolean;
   /** 前台催房产生的时限；没有则为 null。 */
   rushDeadline: Minute | null;
@@ -131,29 +138,46 @@ export interface EventPrompt {
 }
 
 export type Outcome =
+  /** minutes：本次动作里打扫的分钟数，不含步行。 */
   | { type: 'cleaned'; room: RoomId; minutes: Minute }
   | { type: 'knockRefused'; room: RoomId; comeBackAt: Minute }
-  | { type: 'interrupted'; room: RoomId }
+  /** workDone：这间房累计已做的分钟数。阶段 2 再给 reason 加上事件原因。 */
+  | { type: 'interrupted'; room: RoomId; workDone: Minute; reason: 'hardStop' }
   | { type: 'restocked' }
-  | { type: 'called'; newlyDeparted: RoomId[]; dndLifted: RoomId[] }
+  /** 两个列表都只列这通电话新得知的房间，按 world.rooms 的顺序。房态的截止时刻是这条日志的 end。 */
+  | { type: 'called'; newlyDeparted: RoomId[]; newlyLifted: RoomId[] }
   | { type: 'breakTaken' }
   | { type: 'waited'; minutes: Minute }
   | { type: 'responded'; option: string }
   | { type: 'finished' };
 
-/** 一条动作记录。回放、轨迹图和分享卡片都从这份日志重建。 */
+/**
+ * 一条动作记录。回放、轨迹图和分享卡片都从这份日志重建。
+ * 每次 apply 恰好追加一条，引擎从不自动追加记录。
+ */
 export interface LogEntry {
+  /** 动作开始的时刻，即动作前的 state.minute。 */
   start: Minute;
+  /** 动作结束的时刻，即动作后的 state.minute。 */
   end: Minute;
+  /** 动作前的位置。 */
   from: Place;
+  /** 动作后的位置。 */
   to: Place;
+  /** 原样记录提交的动作。 */
   action: Action;
   outcome: Outcome;
+  /** 这条动作实际走过的分钟数。打电话和等待为 0。 */
+  walk: Minute;
+  /** 本动作中路过或停留时新得知已摘牌的请勿打扰房，按 world.rooms 的顺序。电话得知的记在 called 里，不在这里。 */
+  noticedLifted: RoomId[];
 }
 
+/** 'returned' 是 17:00 前自己收工并还车；'hardStop' 是到了 17:00 之后只能还车，还完车结束；'failed' 留给阶段 2 的判负。 */
 export type ShiftEnd = 'returned' | 'hardStop' | 'failed';
 
 export interface State {
+  /** 当前时刻。班次以 'returned' 或 'hardStop' 结束时，等于还车完成的时刻，也就是最后一条日志的 end。 */
   minute: Minute;
   place: Place;
   /** 布草车里剩余的份数。 */
@@ -181,7 +205,10 @@ export interface RoomView {
   lateCheckout: boolean;
   vipDeadline: Minute | null;
   rushDeadline: Minute | null;
-  done: boolean;
+  /** 打扫完成的时刻；没完成为 null。 */
+  doneAt: Minute | null;
+  /** 已经做掉的打扫分钟数。 */
+  workDone: Minute;
   flaggedDeparted: boolean;
   knownAvailableFrom: Minute | null;
   /** 开门前为 null。 */

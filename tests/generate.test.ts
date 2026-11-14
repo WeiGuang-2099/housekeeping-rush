@@ -138,6 +138,139 @@ describe('generate：不同种子', () => {
 });
 
 /**
+ * 钉住几个固定种子生成的世界，三档各两个种子。每间房写成一行，字段依次是：
+ * 房号 房型 线索 脏乱 availableFrom lateCheckout vipDeadline dndLiftsAt。
+ *
+ * 1. 这条测试钉住的是"同一份参数、同一个种子，生成的世界不变"。
+ * 2. 有意调 params.ts 以后，这里的期望会变。更新之前先确认变化只落在被调参数影响的那一项上
+ *    （见 generate.ts 文件头第 3 条：每间房的每一项各用一条随机流），再照新的输出改。
+ * 3. 如果是代码改动让它失败，说明已有种子生成的世界变了。
+ */
+const PINNED_WORLDS: Record<Tier, Record<string, string[]>> = {
+  standard: {
+    'pin-standard-0': [
+      '1201 stayover tourist normal -30 false null null',
+      '1202 departure oneNight tidy -30 false 270 null',
+      '1203 dnd tourist disaster 83 false null null',
+      '1204 departure oneNight normal 52 false 330 null',
+      '1205 stayover longStay tidy 268 false null null',
+      '1206 departure threeNightsPlus normal 44 false null null',
+      '1207 stayover business normal 46 false null null',
+      '1208 dnd business normal -30 false null 200',
+      '1301 stayover longStay tidy 164 false null null',
+      '1302 stayover tourist normal -30 false null null',
+      '1303 stayover family normal 117 false null null',
+      '1304 departure oneNight normal 100 false null null',
+      '1305 stayover family tidy 92 false null null',
+      '1306 departure threeNightsPlus normal 210 true null null',
+      '1307 departure partyOrFamily disaster 98 false null null',
+    ],
+    'pin-standard-1': [
+      '1201 stayover business normal -30 false null null',
+      '1202 stayover family disaster 141 false null null',
+      '1203 stayover tourist normal 66 false null null',
+      '1204 departure threeNightsPlus disaster 129 false null null',
+      '1205 departure oneNight disaster -30 false 270 null',
+      '1206 stayover tourist normal 130 false null null',
+      '1207 stayover business disaster -30 false null null',
+      '1208 departure partyOrFamily disaster 91 false null null',
+      '1301 departure oneNight tidy 127 false null null',
+      '1302 dnd family tidy 95 false null null',
+      '1303 stayover family normal 147 false null null',
+      '1304 departure oneNight normal 47 false null null',
+      '1305 stayover longStay disaster 177 false null null',
+      '1306 departure oneNight tidy 143 false 330 null',
+      '1307 dnd family normal 171 false null null',
+    ],
+  },
+  tight: {
+    'pin-tight-0': [
+      '1201 stayover family disaster -30 false null null',
+      '1202 stayover business normal -30 false null null',
+      '1203 departure partyOrFamily disaster -30 false null null',
+      '1204 stayover tourist tidy 121 false null null',
+      '1205 stayover family normal 88 false null null',
+      '1206 departure threeNightsPlus disaster 49 false null null',
+      '1207 departure threeNightsPlus normal -30 false null null',
+      '1208 stayover business normal -30 false null null',
+      '1301 departure threeNightsPlus tidy -30 false 330 null',
+      '1302 dnd business normal -30 false null 303',
+      '1303 stayover tourist disaster 102 false null null',
+      '1304 departure oneNight tidy -30 false 270 null',
+      '1305 dnd family normal 124 false null 317',
+      '1306 departure threeNightsPlus normal 33 false null null',
+      '1307 stayover business tidy 45 false null null',
+    ],
+    'pin-tight-1': [
+      '1201 stayover family normal 100 false null null',
+      '1202 departure oneNight normal 19 false 330 null',
+      '1203 departure oneNight normal 60 false 270 null',
+      '1204 stayover tourist disaster -30 false null null',
+      '1205 stayover longStay normal 228 false null null',
+      '1206 departure partyOrFamily disaster 124 false null null',
+      '1207 departure oneNight tidy 62 false null null',
+      '1208 departure oneNight normal -30 false null null',
+      '1301 dnd business tidy -30 false null null',
+      '1302 stayover family disaster 115 false null null',
+      '1303 stayover longStay disaster 245 false null null',
+      '1304 stayover tourist normal 24 false null null',
+      '1305 stayover tourist disaster 17 false null null',
+      '1306 departure partyOrFamily normal 145 false null null',
+      '1307 dnd business normal 7 false null 325',
+    ],
+  },
+  weekend: {
+    'pin-weekend-0': [
+      '1201 stayover tourist tidy 102 false null null',
+      '1202 stayover tourist disaster -30 false null null',
+      '1203 departure oneNight tidy 107 false 270 null',
+      '1204 departure partyOrFamily normal -30 false null null',
+      '1205 stayover business tidy -30 false null null',
+      '1206 dnd longStay normal 289 false null 233',
+      '1207 departure threeNightsPlus disaster 137 false null null',
+      '1208 stayover business tidy -30 false null null',
+      '1301 stayover business normal -30 false null null',
+      '1302 departure threeNightsPlus normal 73 false null null',
+      '1303 stayover longStay normal 255 false null null',
+      '1304 departure threeNightsPlus tidy 120 false 300 null',
+      '1305 stayover business tidy -30 false null null',
+      '1306 dnd business tidy 50 false null null',
+      '1307 departure oneNight disaster 112 false 330 null',
+    ],
+    'pin-weekend-1': [
+      '1201 departure threeNightsPlus tidy -30 false 270 null',
+      '1202 stayover family disaster 191 false null null',
+      '1203 departure oneNight normal 210 true null null',
+      '1204 stayover family disaster 161 false null null',
+      '1205 departure oneNight normal 86 false null null',
+      '1206 dnd longStay normal 258 false null null',
+      '1207 stayover tourist disaster -30 false null null',
+      '1208 stayover business tidy -30 false null null',
+      '1301 departure oneNight tidy 124 false null null',
+      '1302 dnd business normal 53 false null 260',
+      '1303 stayover tourist normal 85 false null null',
+      '1304 stayover tourist tidy -30 false null null',
+      '1305 departure partyOrFamily disaster 70 false 300 null',
+      '1306 stayover business normal 30 false null null',
+      '1307 departure threeNightsPlus tidy -30 false 330 null',
+    ],
+  },
+};
+
+/** 一间房写成一行，字段顺序见 PINNED_WORLDS 的说明。null 写成 null。 */
+function pinnedLine(room: RoomTruth): string {
+  return `${room.id} ${room.kind} ${room.clue} ${room.mess} ${room.availableFrom} ${room.lateCheckout} ${room.vipDeadline} ${room.dndLiftsAt}`;
+}
+
+describe('generate：固定种子的世界', () => {
+  it.each(TIERS)('%s 档：固定种子生成的每间房都和钉住的值相同', (tier) => {
+    for (const [seed, expected] of Object.entries(PINNED_WORLDS[tier])) {
+      expect(generate(seed, PARAMS[tier]).rooms.map(pinnedLine), `种子 ${seed}`).toEqual(expected);
+    }
+  });
+});
+
+/**
  * 频率检验的容差：4 个标准差。种子是固定的，所以结果是确定的。
  * 实现正确时，单项检验落在容差之外的概率约为十万分之六，三档合起来约 270 项，总体约百分之二。
  * 改了随机流以后如果只有一项差一点点没过，可以换一组种子复核是不是巧合。
@@ -243,7 +376,7 @@ describe.each(TIERS)('generate 的统计频率：%s 档，1000 个固定种子',
     const { inRoomBoost, leaveDelay } = params.guests;
     for (const [clue, { inRoomAtStart, leaveFrom, leaveTo }] of Object.entries(params.stayClues)) {
       const sample = withClue(guestRooms, clue);
-      // 出门时间窗不早于开工，所以可进时刻不小于 0 就是开工时人在房内。
+      // 出门时间窗不早于开工，所以出门时刻（availableFrom）不小于 0 就是开工时人在房内。
       const inRoom = sample.filter((room) => room.availableFrom >= 0);
       expectRate(inRoom.length, sample.length, Math.min(1, inRoomAtStart + inRoomBoost), clue);
       expectUniformMinutes(

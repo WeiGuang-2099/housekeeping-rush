@@ -8,9 +8,13 @@
  *
  * 1. 时刻一律是整数分钟。params 里的时间窗 [from, to) 左闭右开，在里面等概率抽一个整数分钟，
  *    所以首尾相接的退房早、晚两段（现在是 [0, 120) 和 [120, 150)）互不重叠。
- *    打扫耗时（基础时间乘脏乱系数）在现在的数值下也都是整数，整个引擎可以只用整数分钟。
+ *    打扫耗时（基础时间乘脏乱系数）也必须是整数分钟，checkParams 用 rules.cleanMinutes 逐项检查。
+ *    其余耗时（callMinutes、walkMinutesPerDoor 等）和固定时刻（beforeStart、hardStop、breakLatest、
+ *    vipDeadlines 等）直接取自 params，generate 不检查它们是不是整数。三档内置参数里现在用到的这些值，
+ *    由 tests/params.test.ts 断言为整数；自定义 params 要自己保证，否则引擎里可能出现非整数分钟，
+ *    班次甚至可能在结束前就没有合法动作。
  *
- * 2. 开工前就能进的房间（开工前已退房，或客人开工前已出门），可进时刻记为 params.shift.beforeStart。
+ * 2. 开工前就已退房、或客人开工前已出门的房间，availableFrom 记为 params.shift.beforeStart。
  *    它是负数，具体取值不影响玩法。时间窗都不早于开工，所以 availableFrom 小于 0 就等于"开工前"。
  *
  * 3. 子随机流。每间房的每一项各用一条随机流，种子是 `${seed}:room:${房号}:${用途}`；
@@ -29,6 +33,7 @@
 import { allRooms, placeOf } from './layout';
 import type { MessDistribution, Params } from './params';
 import { createRng, type Rng } from './rng';
+import { cleanMinutes } from './rules';
 import type { DepartureClue, MessLevel, Minute, RoomId, RoomKind, RoomTruth, StayClue, World } from './types';
 
 /**
@@ -36,6 +41,8 @@ import type { DepartureClue, MessLevel, Minute, RoomId, RoomKind, RoomTruth, Sta
  * 漏掉的项永远抽不到，会被 tests/generate.test.ts 的统计测试发现。
  */
 const MESS_LEVELS = ['tidy', 'normal', 'disaster'] as const satisfies readonly MessLevel[];
+/** 只用于参数检查，不参与抽取。 */
+const ROOM_KINDS = ['departure', 'stayover', 'dnd'] as const satisfies readonly RoomKind[];
 const STAY_CLUES = ['business', 'tourist', 'family', 'longStay'] as const satisfies readonly StayClue[];
 const DEPARTURE_CLUES = ['oneNight', 'threeNightsPlus', 'partyOrFamily'] as const satisfies readonly DepartureClue[];
 
@@ -78,6 +85,10 @@ function checkParams(params: Params, roomCount: number): void {
   const onTimeShare = ON_TIME_SEGMENTS.reduce((sum, segment) => sum + params.checkout[segment].share, 0);
   if (params.vipDeadlines.length > 0 && !(onTimeShare > 0)) {
     throw new Error('generate: 有贵宾时限，但退房分布里没有非延迟退房的部分');
+  }
+  // 每种房型乘每档脏乱系数都要得到整数分钟；不是整数时 cleanMinutes 抛错。
+  for (const kind of ROOM_KINDS) {
+    for (const mess of MESS_LEVELS) cleanMinutes(kind, mess, params);
   }
 }
 
@@ -142,7 +153,7 @@ function minuteIn(rng: Rng, from: Minute, to: Minute): Minute {
   return rng.int(from, to - 1);
 }
 
-/** 退房房的可进时刻：按 segments 里各段的 share 选一段，再在段内抽时刻。 */
+/** 退房房的退房时刻（availableFrom）：按 segments 里各段的 share 选一段，再在段内抽时刻。 */
 function drawCheckout(
   rng: Rng,
   params: Params,
@@ -162,7 +173,8 @@ function drawCheckout(
 }
 
 /**
- * 续住房和请勿打扰房的可进时刻，即客人出门的时刻。
+ * 续住房和请勿打扰房的客人出门时刻（availableFrom）。
+ * 请勿打扰房实际最早可进的时刻是 max(dndLiftsAt, availableFrom)，摘牌不等于客人已出门。
  * 以 min(1, inRoomAtStart + inRoomBoost) 的概率开工时人在房内，出门时刻在线索的时间窗里抽，
  * 再整体推迟 leaveDelay；否则客人开工前已出门。周末档的这个做法和 prototype/README.md 一致。
  */

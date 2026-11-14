@@ -28,14 +28,19 @@ export interface Params {
   shift: {
     /**
      * 开工前的一个时刻，必须是负数。开工前就已退房、或客人开工前已出门的房间，
-     * 可进时刻（RoomTruth.availableFrom）记为它。具体取值不影响玩法，只要求早于开工。
+     * RoomTruth.availableFrom 记为它。具体取值不影响玩法，只要求早于开工。
      */
     beforeStart: Minute;
     /** 目标下班时间，16:00。 */
     targetFinish: Minute;
     /** 强制下班时间，17:00。 */
     hardStop: Minute;
-    /** 休息最早和最晚的开始时刻，10:30 和 14:30。到最晚时刻还没休息，下一个动作只能是休息。 */
+    /**
+     * 休息窗口：10:30 和 14:30。休息的开始时刻是到达服务间的时刻。
+     * 还没休息，并且到达服务间的时刻不早于 breakEarliest，就可以休息；没有上界条件。
+     * 到了 breakLatest（整点也算）还没休息，就只能休息。这次休息可以晚于 breakLatest 开始
+     * （上一个动作跨过它时必然如此）。休息不被 hardStop 截断，参数测试保证最晚的强制休息也在 hardStop 之前结束。
+     */
     breakEarliest: Minute;
     breakLatest: Minute;
     breakMinutes: Minute;
@@ -71,7 +76,7 @@ export interface Params {
 
   /** 退房时间分布，四项的 share 之和为 1。 */
   checkout: {
-    /** 开工前已退，可进时刻记为 shift.beforeStart。 */
+    /** 开工前已退，退房时刻（availableFrom）记为 shift.beforeStart。 */
     beforeStart: { share: number };
     early: { share: number; from: Minute; to: Minute };
     late: { share: number; from: Minute; to: Minute };
