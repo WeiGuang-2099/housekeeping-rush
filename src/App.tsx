@@ -17,7 +17,7 @@ export function App() {
       <h1>
         客房冲刺 <span className="en">Housekeeping Rush</span>
       </h1>
-      <p>项目骨架已就绪，引擎还没有实现。</p>
+      <p>这是占位页面，游戏界面还在开发中。</p>
 
       <table>
         <thead>

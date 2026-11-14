@@ -3,7 +3,8 @@
  *
  * 从 generate 生成的世界出发，按房号整个换掉任务单信息和隐藏信息
  * （kind、clue、mess、availableFrom、lateCheckout、vipDeadline、dndLiftsAt）。
- * id 和 place 仍由房号决定，descriptionId 保留生成的值，events 仍为空。
+ * id 和 place 仍由房号决定，events 仍为空。descriptionId 是可选的：写了就覆盖生成的值，
+ * 没写就保留生成的值（现在 generate 给的都是 null）；departure、stayover、dnd 不给它默认值。
  *
  * 没写到的房间一律换成"整班不摘牌的请勿打扰房"：玩家永远不会得知它摘牌，
  * 所以它不能打扫、不挡收工，路过和打电话也得不到它的任何消息。
@@ -23,6 +24,8 @@ export interface RoomSetup {
   lateCheckout: boolean;
   vipDeadline: Minute | null;
   dndLiftsAt: Minute | null;
+  /** 房间描述的编号。可选，构造函数不给默认值：没写就保留生成的值，写了就覆盖。 */
+  descriptionId?: string | null;
 }
 
 /** 开工前（params.shift.beforeStart，三档都是 -30）：开工前就已退房，或客人开工前已出门。 */

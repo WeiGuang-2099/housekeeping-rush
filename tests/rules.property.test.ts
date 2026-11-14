@@ -3,77 +3,37 @@
  *
  * fast-check 生成种子字符串、难度档和一串下标；第 k 步取 legalActions[下标 % 长度]，下标循环使用。
  * 规模：每条性质跑几十到一百个班次，整个 npm test 在本机几十秒内跑完。
+ * 生成器、规模、playShift 和几个小工具在 tests/helpers/play.ts，换一套参数用的 ODD_PARAMS 在 tests/helpers/params.ts。
  */
 
 import fc from 'fast-check';
 import { describe, expect, it, vi } from 'vitest';
 import { generate } from '../src/engine/generate';
 import { allRooms, walkMinutes, walkPath } from '../src/engine/layout';
-import { PARAMS, type Params, type Tier } from '../src/engine/params';
+import { PARAMS } from '../src/engine/params';
 import { apply, cleanMinutes, initial, legalActions } from '../src/engine/rules';
 import type { Action, LogEntry, Place, RoomId, RoomProgress, State, World } from '../src/engine/types';
 import { hideDifferently } from './helpers/hidden';
-
-const TIERS = ['standard', 'tight', 'weekend'] as const satisfies readonly Tier[];
+import { numbersUsedByRules, ODD_PARAMS } from './helpers/params';
+import {
+  at,
+  choose,
+  deepFreeze,
+  lastOf,
+  objectsIn,
+  picksArb,
+  playShift,
+  RUNS,
+  seedArb,
+  tierArb,
+  TIERS,
+  TIMEOUT,
+} from './helpers/play';
 
 /** State 恰好有这十个字段（按字母排序）。不加累计步行之类的字段：步行分钟只记在每条日志的 walk 里。 */
 const STATE_KEYS = ['breakTaken', 'cart', 'ended', 'firedEvents', 'log', 'minute', 'place', 'prompt', 'rooms', 'violation'];
 /** 每条日志恰好有这八个字段（按字母排序）。 */
 const LOG_ENTRY_KEYS = ['action', 'end', 'from', 'noticedLifted', 'outcome', 'start', 'to', 'walk'];
-
-const seedArb = fc.string({ maxLength: 16 });
-const tierArb = fc.constantFrom(...TIERS);
-const picksArb = fc.array(fc.nat({ max: 9999 }), { minLength: 1, maxLength: 64 });
-
-/** 每条性质跑多少个班次。 */
-const RUNS = 100;
-/** 单个性质测试的时限（毫秒）。正常只要一两秒，留足余量给慢机器。 */
-const TIMEOUT = 60_000;
-
-/** 第 step 步取 legal[下标 % 长度]。 */
-function choose(legal: readonly Action[], picks: readonly number[], step: number): Action {
-  const pick = picks[step % picks.length] ?? 0;
-  const action = legal[pick % legal.length];
-  if (action === undefined) throw new Error(`第 ${step} 步没有合法动作`);
-  return action;
-}
-
-interface Trace {
-  world: World;
-  /** states[0] 是开工时的状态，states[i + 1] 是执行 actions[i] 之后的状态。 */
-  states: State[];
-  actions: Action[];
-}
-
-/**
- * 从开工起按下标选动作，跑到班次结束，或跑满 maxSteps 步。
- * 只调用引擎和普通的数组操作，不调用 expect，所以也能放进替换了 Math.random 的那段代码里。
- */
-function playShift(world: World, picks: readonly number[], maxSteps = Number.POSITIVE_INFINITY): Trace {
-  // 每个动作至少推进 1 分钟，班次一定在 hardStop + 事件数 + 1 步之内结束。
-  const limit = world.params.shift.hardStop + world.events.length + 1;
-  let state = initial(world);
-  const states = [state];
-  const actions: Action[] = [];
-  while (state.ended === null && actions.length < maxSteps) {
-    if (actions.length >= limit) throw new Error(`走了 ${limit} 步，班次还没结束`);
-    const action = choose(legalActions(world, state), picks, actions.length);
-    state = apply(world, state, action);
-    states.push(state);
-    actions.push(action);
-  }
-  return { world, states, actions };
-}
-
-function at<T>(list: readonly T[], index: number): T {
-  const item = list[index];
-  if (item === undefined) throw new Error(`下标 ${index} 越界`);
-  return item;
-}
-
-function lastOf<T>(list: readonly T[]): T {
-  return at(list, list.length - 1);
-}
 
 function samePlace(a: Place, b: Place): boolean {
   return a.floor === b.floor && a.door === b.door;
@@ -119,27 +79,6 @@ function candidates(world: World, state: State): Action[] {
     { type: 'finish' },
     { type: 'respond', option: 'continue' },
   ];
-}
-
-function deepFreeze<T>(value: T): T {
-  const seen = new Set<object>();
-  const visit = (node: unknown): void => {
-    if (typeof node !== 'object' || node === null || seen.has(node)) return;
-    seen.add(node);
-    Object.freeze(node);
-    for (const child of Object.values(node)) visit(child);
-  };
-  visit(value);
-  return value;
-}
-
-/** 一个值里能走到的全部对象和数组。 */
-function objectsIn(value: unknown, into: Set<object> = new Set()): Set<object> {
-  if (typeof value === 'object' && value !== null && !into.has(value)) {
-    into.add(value);
-    for (const child of Object.values(value)) objectsIn(child, into);
-  }
-  return into;
 }
 
 /**
@@ -330,74 +269,6 @@ function expectedLegalActions(world: World, state: State): Action[] {
   });
   if (state.breakTaken && blocking.length === 0) legal.push({ type: 'finish' });
   return legal;
-}
-
-/**
- * 每项数值都和三档不同的参数：楼层和房号、服务间所在楼层、步行和电梯、各项耗时、布草、脏乱系数、
- * 休息窗口和 17:00 都换了。rules 里只要有一处没从 world.params 读（写死了数值，或直接引用 PARAMS），
- * 下面"数值都从 world.params 读"的性质就会失败。
- * 最晚的强制休息：任意位置到任意房间最远是 {3, 3} 到 {5, 5}，(3 + 5) × 2 + 3 = 19 分钟；最长的打扫是 40 × 1.5 = 60；
- * 回服务间 {5, 0} 最远是 {5, 5}，5 × 2 = 10 分钟。(300 - 1) + (19 + 60) + 10 + 20 = 408，仍在 480 之前结束。
- */
-const ODD_PARAMS: Params = {
-  ...PARAMS.standard,
-  shift: {
-    beforeStart: -45,
-    targetFinish: 400,
-    hardStop: 480,
-    breakEarliest: 100,
-    breakLatest: 300,
-    breakMinutes: 20,
-    returnCartMinutes: 7,
-  },
-  layout: {
-    floors: [
-      { floor: 3, rooms: [301, 302, 303, 304, 305, 306] },
-      { floor: 5, rooms: [501, 502, 503, 504, 505, 506, 507, 508, 509, 510] },
-    ],
-    servicePoint: { floor: 5, door: 0 },
-    walkMinutesPerDoor: 2,
-    liftMinutes: 3,
-  },
-  mix: { departures: 6, stayovers: 7, dnd: 3 },
-  // 退房房 30、50、60 分钟，续住房和请勿打扰房 15、25、30 分钟，都是整数。
-  rooms: { departure: { baseMinutes: 40, linen: 3 }, stayover: { baseMinutes: 20, linen: 2 } },
-  messMultiplier: { tidy: 0.75, normal: 1.25, disaster: 1.5 },
-  cart: { capacity: 7, restockMinutes: 4 },
-  callMinutes: 3,
-  knockRefusedMinutes: 2,
-  waitStepMinutes: 4,
-  // 08:30 是当天第 510 分钟，能被 10 整除。
-  comeBackRounding: 10,
-  vipDeadlines: [250],
-};
-
-/** rules 用到的每一项数值，用来确认 ODD_PARAMS 和三档都不同。 */
-function numbersUsedByRules(params: Params): Record<string, number> {
-  return {
-    hardStop: params.shift.hardStop,
-    breakEarliest: params.shift.breakEarliest,
-    breakLatest: params.shift.breakLatest,
-    breakMinutes: params.shift.breakMinutes,
-    returnCartMinutes: params.shift.returnCartMinutes,
-    servicePointFloor: params.layout.servicePoint.floor,
-    walkMinutesPerDoor: params.layout.walkMinutesPerDoor,
-    liftMinutes: params.layout.liftMinutes,
-    roomCount: allRooms(params).length,
-    departureBaseMinutes: params.rooms.departure.baseMinutes,
-    departureLinen: params.rooms.departure.linen,
-    stayoverBaseMinutes: params.rooms.stayover.baseMinutes,
-    stayoverLinen: params.rooms.stayover.linen,
-    tidy: params.messMultiplier.tidy,
-    normal: params.messMultiplier.normal,
-    disaster: params.messMultiplier.disaster,
-    capacity: params.cart.capacity,
-    restockMinutes: params.cart.restockMinutes,
-    callMinutes: params.callMinutes,
-    knockRefusedMinutes: params.knockRefusedMinutes,
-    waitStepMinutes: params.waitStepMinutes,
-    comeBackRounding: params.comeBackRounding,
-  };
 }
 
 describe('性质：确定性', () => {
@@ -706,7 +577,7 @@ describe('性质：纯函数', () => {
     () => {
       fc.assert(
         fc.property(seedArb, tierArb, picksArb, (seed, tier, picks) => {
-          // 用 params 的副本生成，免得冻结全局的 PARAMS。
+          // 用 params 的副本生成：深度冻结只冻结这个测试自己造的对象，不碰全局共用的 PARAMS。
           const world = deepFreeze(generate(seed, structuredClone(PARAMS[tier])));
           const worldCopy = structuredClone(world);
           const inputs: { state: State; stateCopy: State; action: Action; actionCopy: Action }[] = [];

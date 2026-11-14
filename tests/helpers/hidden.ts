@@ -5,9 +5,16 @@
  * 返回另一个世界，只改动玩家到 state 为止还不知道的隐藏信息，改成什么由 noise 决定。
  * 同一串动作在两个世界里都合法，每一步的状态（含日志）完全相同。
  *
- * 改动的范围都从 state.rooms 和 state.log 精确推出来。推错了，两个世界的前缀状态就会不同，
- * 所以调用方逐步断言前缀状态相同，本身就能发现这里推错。
- * rules 的不泄露性质用它比较状态、合法动作和报错文字；observe 的不泄露性质可以直接复用：
+ * 改动的范围都从 state.rooms 和 state.log 精确推出来。推错有两种，由不同的地方发现：
+ * - 改多了（改到玩家已经知道的信息）：两个世界的前缀状态会不同，或者 View 会不同（描述编号不进 State；
+ *   被 17:00 截断的房间改了脏乱，状态也可能照样相同）。rules 的不泄露性质在第二个世界里逐步重放前缀、比较状态，
+ *   observe 的不泄露性质还比较每一步的 View，两者合起来能发现。tests/helpers.test.ts 的自检还用固定种子在
+ *   ODD_PARAMS 和三档下各抽 1000 个前缀，逐步重放、比较状态：随机抽样不一定抽得到的少见推错，只要落在这批样本里，
+ *   每次都抓得到。
+ * - 改少了（漏掉某一类隐藏信息，或者某一类里漏掉一种房型，甚至一项都不改）：前缀状态照样相同，逐步比较发现不了，
+ *   不泄露性质对没改的那部分信息等于没查。这一侧由 tests/helpers.test.ts 的自检发现：
+ *   下面"完全没揭晓的值"每类、每种房型都确实改动过，种子也换了。"只知道范围的值"那一组没有这样的自检。
+ * rules 的不泄露性质用它比较状态、合法动作和报错文字；observe 的不泄露性质用它比较 View：
  * 同一前缀的每一步，observe(world, 状态) 和 observe(第二个世界, 状态) 应当完全相同。
  *
  * 完全没揭晓的值，任意改：
@@ -27,7 +34,8 @@
  *   （日志只记在哪个动作里得知，不记是那个动作里的哪一次看到的）。
  *
  * 延迟退房房的退房时刻是公开的（任务单上注明延迟退房，时刻在 params 里），不改。
- * 不改 world.seed 和 world.events（阶段 0 的事件恒为空）。
+ * 种子也换掉（改成 `${world.seed}:hidden`）：View 里如果带了种子，不泄露性质就会失败。
+ * rules 不读种子，rules 的不泄露性质不受影响。不改 world.events（阶段 0 的事件恒为空）。
  */
 
 import { walkPath } from '../../src/engine/layout';
@@ -152,5 +160,5 @@ export function hideDifferently(world: World, state: State, noise: readonly numb
     }
     return changed;
   });
-  return { ...world, rooms };
+  return { ...world, seed: `${world.seed}:hidden`, rooms };
 }

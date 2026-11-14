@@ -1,5 +1,5 @@
 /**
- * rules 的单元测试：initial、legalActions 与非法动作，以及对外入口。
+ * rules 的单元测试：initial、legalActions 与非法动作、日志里的动作，以及对外入口。
  * 打扫、打电话、路过见 rules.service.test.ts 和 rules.call.test.ts；
  * 补货、休息、等待、收工和 17:00 见 rules.shift.test.ts；性质测试见 rules.property.test.ts。
  *
@@ -21,7 +21,7 @@ import { generate } from '../src/engine/generate';
 import { allRooms, walkPath } from '../src/engine/layout';
 import { PARAMS, type Params, type Tier } from '../src/engine/params';
 import { apply, cleanMinutes, initial, legalActions } from '../src/engine/rules';
-import type { Action, State, World } from '../src/engine/types';
+import type { Action, Minute, RoomId, State, World } from '../src/engine/types';
 import {
   act,
   expectIllegal,
@@ -33,6 +33,7 @@ import {
   serviceTargets,
   waitUntil,
 } from './helpers/drive';
+import { deepFreeze } from './helpers/play';
 import { BEFORE_START, controlledWorld, departure, dnd, patchWorld, stayover, type RoomSetup } from './helpers/world';
 
 const TIERS: Tier[] = ['standard', 'tight', 'weekend'];
@@ -581,6 +582,192 @@ describe('按 world.rooms 的顺序，不按房号：楼层倒过来列的自定
     // 按房号是 1203 在前，按 world.rooms 是 1303 在前。（按看到的先后排的写法，由 rules.service.test.ts 的路过用例区分。）
     state = play(world, state, act.service(1205));
     expect(last(state)).toMatchObject({ start: 172, end: 197, walk: 10, noticedLifted: [1303, 1203] });
+  });
+});
+
+describe('日志里的动作', () => {
+  // apply 写日志时按动作类型重建动作：只留这个类型的字段，键的顺序固定（type 在前），
+  // 提交时多带的键不进日志，提交时键的先后也不影响日志。
+  // toStrictEqual 不比较键的顺序（{ a: 1, b: 2 } 和 { b: 2, a: 1 } 判为相等），要证明顺序的地方都比 Object.keys 或 JSON.stringify。
+
+  /**
+   * 日志里每种动作的键，按这个顺序。respond 阶段 0 走不到：prompt 恒为 null，apply 收到 respond 就抛错
+   * （见"respond 永远不在列表里"那个用例），日志里不会出现，所以这里不列。
+   */
+  const LOGGED_KEYS: Record<Exclude<Action['type'], 'respond'>, readonly string[]> = {
+    service: ['type', 'room'],
+    restock: ['type'],
+    call: ['type'],
+    break: ['type'],
+    wait: ['type', 'minutes'],
+    finish: ['type'],
+  };
+
+  /**
+   * 一整局的固定合法动作，阶段 0 走得到的六种都有。世界是 controlledWorld({ 1201: stayover() })：
+   * 1201 的客人开工前已出门，其余是整班不摘牌的请勿打扰房，不挡收工。
+   * 打电话（0 到 2）；打扫 1201（走 1 分钟，3 到门口，打扫 15 分钟，18 做完）；回服务间补货（19 到，24 补完）；
+   * 等 1 分钟（25），再等 19 次 5 分钟（120）；在服务间休息（120 到 150）；收工（步行 0，还车 5 分钟，155 结束）。
+   * 每次调用都返回新的动作对象。
+   */
+  function sixKinds(): Action[] {
+    return [
+      act.call(),
+      act.service(1201),
+      act.restock(),
+      act.wait(1),
+      ...Array.from({ length: 19 }, () => act.wait(5)),
+      act.break(),
+      act.finish(),
+    ];
+  }
+
+  /**
+   * 同一个动作换一种写法：多带几个键，字段都写在 type 前面，每个动作的键都是 note、room、minutes、option、type。
+   * note 和哪种动作都无关；这个类型自己的字段取原来的值，别的类型的字段随手填（补货、打电话、休息、收工带着 room、minutes、option，
+   * 等待带着 room、option，打扫带着 minutes、option），只按字段名保留 room、minutes、option 的写法在这里会露馅。
+   * 先存进有显式类型的变量再返回：变量不是新写的对象字面量，不触发多余属性检查，所以不用 as。
+   */
+  function scrambled(action: Action): Action {
+    const written: Action & { note: string; room: RoomId; minutes: Minute; option: string } = {
+      note: 'x',
+      room: 1201,
+      minutes: 3,
+      option: 'continue',
+      ...action,
+    };
+    return written;
+  }
+
+  it('提交时键的顺序反过来（等待先 minutes 后 type，打扫先 room 后 type）：日志里动作的键是 type、minutes 和 type、room，值不变', () => {
+    // 1201 的客人开工前已出门。
+    const world = controlledWorld({ 1201: stayover() });
+    // 等 3 分钟：不是列表里的上限 5，1 到 5 之间的整数都合法。
+    const wait: Action = { minutes: 3, type: 'wait' };
+    const service: Action = { room: 1201, type: 'service' };
+    // 对照：提交的对象确实是字段在前、type 在后。
+    expect(Object.keys(wait)).toEqual(['minutes', 'type']);
+    expect(Object.keys(service)).toEqual(['room', 'type']);
+
+    const waited = apply(world, initial(world), wait);
+    expect(last(waited)).toMatchObject({ start: 0, end: 3, outcome: { type: 'waited', minutes: 3 } });
+    expect(Object.keys(last(waited).action)).toEqual(['type', 'minutes']);
+    expect(last(waited).action).toStrictEqual({ type: 'wait', minutes: 3 });
+
+    // 3 去 1201：走 1 分钟，4 到门口，打扫 15 分钟，19 做完。
+    const cleaned = apply(world, waited, service);
+    expect(last(cleaned)).toMatchObject({ start: 3, end: 19, outcome: { type: 'cleaned', room: 1201, minutes: 15 } });
+    expect(Object.keys(last(cleaned).action)).toEqual(['type', 'room']);
+    expect(last(cleaned).action).toStrictEqual({ type: 'service', room: 1201 });
+  });
+
+  it('提交时多带的键不进日志，别的类型的字段也一样（先存进有显式类型的变量再提交，不用 as）：打电话只留 type，等待只留 type、minutes，打扫只留 type、room', () => {
+    // 1201 的客人开工前已出门。
+    const world = controlledWorld({ 1201: stayover() });
+    // 变量不是新写的对象字面量，交给 apply 时不触发多余属性检查。三个动作都多带一个和哪种动作都无关的 note，
+    // 还带着别的类型的字段（打电话带 room、minutes、option，等待带 room、option，打扫带 minutes、option）：
+    // 只按字段名保留 room、minutes、option 的写法，日志里会多出这些键。
+    const call: { type: 'call'; note: string; room: RoomId; minutes: Minute; option: string } = {
+      type: 'call',
+      note: 'x',
+      room: 1201,
+      minutes: 3,
+      option: 'continue',
+    };
+    const wait: { type: 'wait'; note: string; minutes: Minute; room: RoomId; option: string } = {
+      type: 'wait',
+      note: 'x',
+      minutes: 3,
+      room: 1201,
+      option: 'continue',
+    };
+    const service: { type: 'service'; note: string; room: RoomId; minutes: Minute; option: string } = {
+      type: 'service',
+      note: 'x',
+      room: 1201,
+      minutes: 3,
+      option: 'continue',
+    };
+    const submitted = structuredClone([call, wait, service]);
+
+    // 电话照常打：0 到 2。没写到的房间都是整班不摘牌的请勿打扰房，没有退房房，什么也没得知。
+    const called = apply(world, initial(world), call);
+    expect(last(called)).toMatchObject({ start: 0, end: 2, outcome: { type: 'called', newlyDeparted: [], newlyLifted: [] } });
+    expect(last(called).action).toStrictEqual({ type: 'call' });
+    expect(Object.keys(last(called).action)).toEqual(['type']);
+
+    // 等 3 分钟：2 到 5。
+    const waited = apply(world, called, wait);
+    expect(last(waited)).toMatchObject({ start: 2, end: 5, outcome: { type: 'waited', minutes: 3 } });
+    expect(last(waited).action).toStrictEqual({ type: 'wait', minutes: 3 });
+    expect(Object.keys(last(waited).action)).toEqual(['type', 'minutes']);
+
+    // 5 去 1201：走 1 分钟，6 到门口，打扫 15 分钟，21 做完。
+    const cleaned = apply(world, waited, service);
+    expect(last(cleaned)).toMatchObject({ start: 5, end: 21, outcome: { type: 'cleaned', room: 1201, minutes: 15 } });
+    expect(last(cleaned).action).toStrictEqual({ type: 'service', room: 1201 });
+    expect(Object.keys(last(cleaned).action)).toEqual(['type', 'room']);
+
+    // 提交的对象没被改：多带的键都还在。
+    expect([call, wait, service]).toStrictEqual(submitted);
+  });
+
+  it('阶段 0 走得到的六种动作都进了日志，动作的键：打扫是 type、room，等待是 type、minutes，补货、打电话、休息、收工只有 type', () => {
+    const world = controlledWorld({ 1201: stayover() });
+    const state = play(world, initial(world), ...sixKinds());
+    expect(state.ended).toBe('returned');
+    expect(state.minute).toBe(155);
+    // 六种都真的出现过。respond 阶段 0 走不到：apply 收到就抛错，日志里不会有。
+    expect(new Set(state.log.map((entry) => entry.action.type))).toEqual(new Set(Object.keys(LOGGED_KEYS)));
+    expectIllegal(world, initial(world), act.respond('continue'));
+    state.log.forEach((entry, index) => {
+      const { type } = entry.action;
+      if (type === 'respond') throw new Error('阶段 0 的日志里不该有 respond');
+      expect(Object.keys(entry.action), `第 ${index + 1} 条（${type}）`).toEqual(LOGGED_KEYS[type]);
+    });
+  });
+
+  it('同一串动作换一种写法提交（多带几个键，包括别的类型的字段；字段都写在 type 前面）：得到的状态和照常提交时相同，JSON.stringify 也逐字相同', () => {
+    const world = controlledWorld({ 1201: stayover() });
+    const plain = play(world, initial(world), ...sixKinds());
+    // 对照：换过写法的动作确实多带了键，字段也确实写在 type 前面，自己的字段还是原来的值。
+    for (const action of sixKinds()) {
+      const written = scrambled(action);
+      expect(Object.keys(written), action.type).toEqual(['note', 'room', 'minutes', 'option', 'type']);
+      expect(written, action.type).toMatchObject(action);
+    }
+    const state = play(world, initial(world), ...sixKinds().map(scrambled));
+    expect(state).toStrictEqual(plain);
+    expect(JSON.stringify(state)).toBe(JSON.stringify(plain));
+  });
+
+  it('日志里的动作不是提交的那个对象；提交的动作先深度冻结，apply 不抛错，提交后内容和键顺序都和提交前一样', () => {
+    const world = controlledWorld({ 1201: stayover() });
+    const forms: [string, (action: Action) => Action][] = [
+      ['照常写', (action) => action],
+      ['换一种写法', scrambled],
+    ];
+    for (const [label, form] of forms) {
+      let state = initial(world);
+      sixKinds().forEach((action, index) => {
+        const where = `${label}，第 ${index + 1} 步（${action.type}）`;
+        const submitted = deepFreeze(form(action));
+        const keys = Object.keys(submitted);
+        const copy = structuredClone(submitted);
+        const before = state;
+        expect(() => {
+          state = apply(world, before, submitted);
+        }, where).not.toThrow();
+        expect(state.log, where).toHaveLength(before.log.length + 1);
+        // 日志里是新建的对象，只有这个类型的字段（键的顺序由上面的用例查）。
+        expect(last(state).action, where).not.toBe(submitted);
+        expect(last(state).action, where).toStrictEqual(action);
+        // 提交的对象没被改：内容和键的顺序都和提交前一样。
+        expect(submitted, where).toStrictEqual(copy);
+        expect(Object.keys(submitted), where).toEqual(keys);
+      });
+      expect(state.ended, label).toBe('returned');
+    }
   });
 });
 

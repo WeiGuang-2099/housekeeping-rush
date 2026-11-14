@@ -1,7 +1,7 @@
 /**
  * 班次规则：初始状态、合法动作和动作的结算。规则的出处是 docs/DESIGN.md。
  *
- * 1. 纯函数。没有随机数，不读系统时间，所有数值从 world.params 读。
+ * 1. 纯函数。没有随机数，不读系统时间，所有数值从 world.params 读（legalActionsForView 从传入的 params 读）。
  *    apply 不修改传入的 world、state、action。返回的新 State 复制 rooms 数组，只替换有变化的房间；
  *    log 用新数组追加一条；不用深拷贝。相邻两个 State 可以共享没变的部分，但不与 params 共享对象
  *    （例如 place 从 servicePoint 复制一份）。State 里只放普通对象和数组。
@@ -10,6 +10,9 @@
  *    里面没有 availableFrom、mess、dndLiftsAt、descriptionId、world.events、world.seed。
  *    illegalReason(known, action, params) 是唯一的判定函数：合法返回 null，非法返回中文原因。
  *    legalActions 用它过滤 candidateActions 列出的候选；apply 只用它校验提交的这一个动作，不生成整张列表。
+ *    按 View 判定时（legalActionsForView，给只看 View 的策略用），knownStateOfView 把 View 投影到同一个结构，
+ *    复用同一份候选和同一个判定函数，所以 legalActionsForView(observe(world, state), world.params)
+ *    与 legalActions(world, state) 相同，顺序也相同。
  *    判定函数读不到隐藏信息，所以在只差隐藏信息的两个世界里，同一个非法动作的报错文字完全相同。
  *
  * 3. 动作按时间线推进。Timeline 是一个动作执行中的草稿：walkTo 沿 layout.walkPath 逐个门位步行
@@ -18,11 +21,12 @@
  *    门位观察只揭晓请勿打扰房已摘牌，不揭晓别的隐藏信息。17:00 截断用同一条时间线。
  *    段与段之间调用 eventCheckpoint，阶段 2 在那里处理事件，现在什么都不做。
  *
- * 4. 每次 apply 恰好追加一条日志，引擎从不自动追加记录。
+ * 4. 每次 apply 恰好追加一条日志，引擎从不自动追加记录。日志里的动作是按类型重建的副本（copyAction）：
+ *    只留这个类型的字段，键的顺序固定，提交时多带的键不进日志。
  */
 
 import { toClock } from './clock';
-import { walkMinutes, walkPath } from './layout';
+import { allRooms, walkMinutes, walkPath } from './layout';
 import type { Params } from './params';
 import type {
   Action,
@@ -37,6 +41,7 @@ import type {
   RoomTruth,
   ShiftEnd,
   State,
+  View,
   World,
 } from './types';
 
@@ -91,6 +96,17 @@ export function legalActions(world: World, state: State): Action[] {
 }
 
 /**
+ * 按 View 判定的合法动作，给只看 View 的策略（新手、老手）用。和 legalActions 共用同一份判定：
+ * 把 View 投影成 KnownState，再用 candidateActions 列候选、illegalReason 过滤，写法和 legalActions 一样。
+ * 所以对任意状态，legalActionsForView(observe(world, state), world.params) 与 legalActions(world, state) 相同，顺序也相同。
+ * View 的房间和 allRooms(params) 的房号、顺序对不上时抛错。不修改 view，深度冻结的 View 也能用。
+ */
+export function legalActionsForView(view: View, params: Params): Action[] {
+  const known = knownStateOfView(view, params);
+  return candidateActions(known, params).filter((action) => illegalReason(known, action, params) === null);
+}
+
+/**
  * 执行一个动作，返回新的状态，并在日志里追加恰好一条记录。
  * 先校验这一个动作的合法性，非法就抛 Error（中文，只写玩家已知的原因）。
  */
@@ -133,12 +149,12 @@ type KnownRoom = Pick<RoomTruth, 'id' | 'place' | 'kind' | 'clue' | 'lateCheckou
 /**
  * 判定合法性时能看到的全部：(world, state) 只保留玩家已知字段的投影。
  * 没有 availableFrom、mess、dndLiftsAt、descriptionId、world.events、world.seed，判定函数想读也读不到。
- * observe 完成后，View 也能投影成这个结构，按 View 判定时复用同一个判定函数。
+ * 按 View 判定时，knownStateOfView 把 View 投影成同一个结构，复用同一个判定函数。
  */
 interface KnownState extends Pick<State, 'minute' | 'place' | 'cart' | 'breakTaken' | 'ended'> {
   /** 待回应事件的选项编号，按原来的顺序；没有待回应的事件时为 null。只取编号，不带事件本身。 */
   pendingOptions: string[] | null;
-  /** 按 world.rooms 的顺序。 */
+  /** 按 world.rooms 的顺序。从 View 投影时按 View 的顺序，也就是同一个顺序。 */
   rooms: KnownRoom[];
 }
 
@@ -179,7 +195,45 @@ function knownStateOf(world: World, state: State): KnownState {
 }
 
 /**
- * legalActions 的候选，顺序就是列表的顺序：有待回应的事件时是它的各个选项；
+ * 把 View 投影成 KnownState，按 View 判定合法性时用。逐个字段复制，不修改 view，深度冻结的 View 也能用。
+ * View 的房间要和 allRooms(params) 的房号逐个相同（数量和顺序都相同），否则抛错。
+ * View 里没有 messRevealed，用 mess 是否已经揭晓（不是 null）代替，不读档位。开销是 O(房间数)。
+ */
+function knownStateOfView(view: View, params: Params): KnownState {
+  const ids = allRooms(params);
+  if (view.rooms.length !== ids.length || view.rooms.some((room, index) => room.id !== ids[index])) {
+    throw new Error('rules: View 的房间和 params 的楼层对不上');
+  }
+  return {
+    minute: view.minute,
+    place: view.place,
+    cart: view.cart,
+    breakTaken: view.breakTaken,
+    ended: view.ended,
+    // 阶段 0 的 View.prompt 恒为 null，没有待回应的事件。阶段 2 换成事件视图类型以后，从它的选项编号投影。
+    pendingOptions: null,
+    rooms: view.rooms.map(
+      (room): KnownRoom => ({
+        id: room.id,
+        place: room.place,
+        kind: room.kind,
+        clue: room.clue,
+        lateCheckout: room.lateCheckout,
+        vipDeadline: room.vipDeadline,
+        doneAt: room.doneAt,
+        workDone: room.workDone,
+        flaggedDeparted: room.flaggedDeparted,
+        knownAvailableFrom: room.knownAvailableFrom,
+        dndLiftKnown: room.dndLifted,
+        messRevealed: room.mess !== null,
+        rushDeadline: room.rushDeadline,
+      }),
+    ),
+  };
+}
+
+/**
+ * legalActions 和 legalActionsForView 的候选，顺序就是列表的顺序：有待回应的事件时是它的各个选项；
  * 否则是按 world.rooms 顺序的 service，然后是 restock、call、break、wait、finish。
  * wait 只列一个，分钟数取这一刻的上限。候选合不合法由 illegalReason 决定。
  */
@@ -515,7 +569,7 @@ function closeAction(timeline: Timeline, state: State, action: Action, outcome: 
     end: timeline.minute,
     from: state.place,
     to: timeline.place,
-    action: { ...action },
+    action: copyAction(action),
     outcome,
     walk: timeline.walk,
     // 按 world.rooms 的顺序，而不是看到的先后。
@@ -557,6 +611,29 @@ function roomSpec(kind: RoomKind, params: Params): { baseMinutes: Minute; linen:
 
 function copyPlace(place: Place): Place {
   return { floor: place.floor, door: place.door };
+}
+
+/**
+ * 日志里记的动作：按类型重建的副本，只留这个类型的字段，键的顺序固定。
+ * 提交时多带的键不进日志，提交时键的先后也不影响日志，所以内容相同的 View 序列化的结果相同。
+ */
+function copyAction(action: Action): Action {
+  switch (action.type) {
+    case 'service':
+      return { type: 'service', room: action.room };
+    case 'restock':
+      return { type: 'restock' };
+    case 'call':
+      return { type: 'call' };
+    case 'break':
+      return { type: 'break' };
+    case 'wait':
+      return { type: 'wait', minutes: action.minutes };
+    case 'respond':
+      return { type: 'respond', option: action.option };
+    case 'finish':
+      return { type: 'finish' };
+  }
 }
 
 function samePlace(a: Place, b: Place): boolean {
