@@ -212,11 +212,23 @@ const WEEKEND: Params = {
   guests: { leaveDelay: 30, inRoomBoost: 0.15 },
 };
 
-export const PARAMS: Record<Tier, Params> = {
-  standard: STANDARD,
-  tight: TIGHT,
-  weekend: WEEKEND,
-};
+/** 把一个对象和它能走到的全部对象、数组冻结。PARAMS 被所有班次、幽灵和测试共用，冻结后误改会直接抛错。 */
+function deepFreeze<T>(value: T): T {
+  // 三档之间共享子对象（紧档和周末档由标准档展开）。记下走过的对象，每个只走一次，有环也不会打转。
+  const seen = new Set<object>();
+  const visit = (node: unknown): void => {
+    if (typeof node !== 'object' || node === null || seen.has(node)) return;
+    seen.add(node);
+    Object.freeze(node);
+    const children: unknown[] = Object.values(node);
+    for (const child of children) visit(child);
+  };
+  visit(value);
+  return value;
+}
+
+/** 三档的参数，深度冻结。要一套改过的参数，就像 TIGHT 那样用展开写法造新对象，改到哪一层就展开到哪一层。 */
+export const PARAMS: Record<Tier, Params> = deepFreeze({ standard: STANDARD, tight: TIGHT, weekend: WEEKEND });
 
 /**
  * 每日班次的难度随星期递增。

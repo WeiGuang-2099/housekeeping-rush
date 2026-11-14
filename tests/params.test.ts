@@ -4,6 +4,7 @@ import { allRooms, placeOf, walkMinutes } from '../src/engine/layout';
 import { PARAMS, tierForWeekday, type MessDistribution, type Tier } from '../src/engine/params';
 import { cleanMinutes } from '../src/engine/rules';
 import type { MessLevel, RoomKind } from '../src/engine/types';
+import { objectsIn } from './helpers/play';
 
 const TIERS: Tier[] = ['standard', 'tight', 'weekend'];
 const KINDS: RoomKind[] = ['departure', 'stayover', 'dnd'];
@@ -194,5 +195,46 @@ describe('难度档之间的差别', () => {
     expect([1, 2, 3].map(tierForWeekday)).toEqual(['standard', 'standard', 'standard']);
     expect([4, 5].map(tierForWeekday)).toEqual(['tight', 'tight']);
     expect([6, 0].map(tierForWeekday)).toEqual(['weekend', 'weekend']);
+  });
+});
+
+describe('PARAMS 深度冻结', () => {
+  it('从 PARAMS 能走到的每个对象和数组都冻结了', () => {
+    const objects = objectsIn(PARAMS);
+    // 先确认确实走到了各层的对象和数组，免得什么都没收集到时空过：
+    // 三档共用的子对象（紧档和周末档由标准档展开）、各档自己的子对象、楼层和房号的数组、最深处的脏乱概率。
+    const samples: object[] = [
+      PARAMS,
+      PARAMS.standard,
+      PARAMS.tight,
+      PARAMS.weekend,
+      PARAMS.standard.shift,
+      PARAMS.tight.cart,
+      PARAMS.weekend.guests,
+      PARAMS.weekend.vipDeadlines,
+      PARAMS.standard.layout.floors,
+      PARAMS.standard.layout.servicePoint,
+      ...PARAMS.standard.layout.floors.map((plan) => plan.rooms),
+      PARAMS.standard.stayClues.family.mess,
+      PARAMS.standard.events.rushRequest,
+    ];
+    for (const sample of samples) expect(objects.has(sample)).toBe(true);
+    expect([...objects].filter((object) => !Object.isFrozen(object))).toEqual([]);
+  });
+
+  it('给一个字段赋值抛 TypeError，值不变', () => {
+    // 测试文件是 ES 模块，在严格模式下运行：给冻结对象的字段赋值会抛 TypeError。
+    const { cart } = PARAMS.tight;
+    const capacity = cart.capacity;
+    try {
+      expect(() => {
+        cart.capacity = capacity + 1;
+      }).toThrow(TypeError);
+    } finally {
+      // 没冻结时上面的赋值会成功：改回原值，免得影响同一文件里的其他用例。冻结时值没变，不会走到这里的赋值。
+      if (cart.capacity !== capacity) cart.capacity = capacity;
+    }
+    // 紧档的布草车仍是 6 份。
+    expect(PARAMS.tight.cart.capacity).toBe(6);
   });
 });
