@@ -122,6 +122,12 @@ export interface Params {
    * 这不是规则，玩家和别的幽灵什么时候休息都行。
    */
   novice: { breakAt: Minute };
+
+  /**
+   * 全知幽灵（src/policies/oracle.ts）用的数值。beamWidth 是束搜索每一层留下的方案数：越宽越接近最优，也越慢。
+   * 它决定全知有多强，所以和新手的休息时刻一样放在这里。三档共用一个对象。
+   */
+  oracle: { beamWidth: number };
 }
 
 const STANDARD: Params = {
@@ -206,6 +212,9 @@ const STANDARD: Params = {
 
   // 12:30。三档取同一个值：紧档和周末档由标准档展开，共用这个对象。
   novice: { breakAt: 240 },
+
+  // 三档共用。
+  oracle: { beamWidth: 24 },
 };
 
 /** 周四周五档：布草车减到 6 份。 */

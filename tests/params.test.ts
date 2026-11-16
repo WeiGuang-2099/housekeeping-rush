@@ -160,6 +160,13 @@ describe.each(TIERS)('params 的时间：%s 档', (tier) => {
     expect(breakAt).toBeLessThan(breakLatest);
   });
 
+  it('全知的束宽是正整数：24', () => {
+    const { beamWidth } = params.oracle;
+    expect(beamWidth).toBe(24);
+    expect(Number.isInteger(beamWidth)).toBe(true);
+    expect(beamWidth).toBeGreaterThanOrEqual(1);
+  });
+
   it('最晚的强制休息也在 17:00 之前结束：按现有参数是 457（16:07）', () => {
     const { breakLatest, breakMinutes, hardStop } = params.shift;
     const service = params.layout.servicePoint;
@@ -208,6 +215,11 @@ describe('难度档之间的差别', () => {
     expect(PARAMS.weekend.novice).toBe(PARAMS.standard.novice);
   });
 
+  it('全知的数值三档相同：紧档和周末档共用标准档的那个对象', () => {
+    expect(PARAMS.tight.oracle).toBe(PARAMS.standard.oracle);
+    expect(PARAMS.weekend.oracle).toBe(PARAMS.standard.oracle);
+  });
+
   it('难度随星期递增', () => {
     expect([1, 2, 3].map(tierForWeekday)).toEqual(['standard', 'standard', 'standard']);
     expect([4, 5].map(tierForWeekday)).toEqual(['tight', 'tight']);
@@ -235,6 +247,7 @@ describe('PARAMS 深度冻结', () => {
       PARAMS.standard.stayClues.family.mess,
       PARAMS.standard.events.rushRequest,
       PARAMS.weekend.novice,
+      PARAMS.weekend.oracle,
     ];
     for (const sample of samples) expect(objects.has(sample)).toBe(true);
     expect([...objects].filter((object) => !Object.isFrozen(object))).toEqual([]);

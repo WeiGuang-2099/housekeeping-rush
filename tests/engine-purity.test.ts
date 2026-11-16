@@ -24,7 +24,8 @@
  * - 不许动态导入（import(...)，含 import.meta.glob），理由同上；
  * - 不许读 .seed，['seed'] 的写法也算。
  * 解构出种子（const { seed } = world）这类写法认不出，故意不调用 generate、照着生成过程重写一遍也认不出，都靠代码审查。
- * 新手另有一条：只从引擎的对外入口导入（模块名是 '../engine'）。
+ * 新手另有一条：只从引擎的对外入口导入（模块名是 '../engine'）。全知直接拿 World，同样不导入 generate、不读种子
+ * （它用不着），只从引擎的对外入口和新手（'./novice'，新手的走法是它的候选）导入。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -224,15 +225,20 @@ describe('引擎源码：依赖方向', () => {
 });
 
 describe('策略源码：没有随机数和系统时间，不依赖界面，拿不到真实世界', () => {
-  it('读到了策略的源码，至少有 novice.ts；去掉注释以后代码还在：novice.ts 导出 novice，导入子句也找得到', () => {
+  it('读到了策略的源码，至少有 novice.ts 和 oracle.ts；去掉注释以后代码还在：两个文件导出各自的策略，导入子句也找得到', () => {
     // 一个文件都没读到，或者去注释误删了代码时，下面逐个文件的检查会空过，所以先确认。
-    expect(Object.keys(POLICY_SOURCES).map(fileName)).toContain('novice.ts');
+    expect(Object.keys(POLICY_SOURCES).map(fileName)).toEqual(expect.arrayContaining(['novice.ts', 'oracle.ts']));
     for (const [path, source] of Object.entries(POLICY_SOURCES)) expect(source.length, path).toBeGreaterThan(0);
     const novice = sourceOf('novice.ts', POLICY_SOURCES);
     expect(stripComments(novice)).toMatch(/export const novice\b/);
     const clauses = importClauses(novice);
     expect(clauses).toHaveLength(1);
     expect(clauses.join()).toContain('legalActionsForView');
+    const oracle = sourceOf('oracle.ts', POLICY_SOURCES);
+    expect(stripComments(oracle)).toMatch(/export const oracle\b/);
+    const oracleClauses = importClauses(oracle);
+    expect(oracleClauses).toHaveLength(2);
+    expect(oracleClauses.join()).toContain('legalActions');
   });
 
   it.each(Object.entries(POLICY_SOURCES))('%s：去掉注释以后不出现禁用的名字（含 import.meta），也不导入 react', (_path, source) => {
@@ -248,6 +254,10 @@ describe('策略源码：没有随机数和系统时间，不依赖界面，拿�
 
   it('novice.ts 只从引擎的对外入口 src/engine/index.ts 导入', () => {
     expect(importedModules(sourceOf('novice.ts', POLICY_SOURCES))).toEqual(['../engine']);
+  });
+
+  it('oracle.ts 只从引擎的对外入口 src/engine/index.ts 和新手导入', () => {
+    expect(importedModules(sourceOf('oracle.ts', POLICY_SOURCES))).toEqual(['../engine', './novice']);
   });
 });
 
