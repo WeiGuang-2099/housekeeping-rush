@@ -8,12 +8,15 @@
  *
  * 2. 合法性只读玩家已知的信息，只写一份。knownStateOf 把 (world, state) 投影成 KnownState，
  *    里面没有 availableFrom、mess、dndLiftsAt、descriptionId、world.events、world.seed。
- *    illegalReason(known, action, params) 是唯一的判定函数：合法返回 null，非法返回中文原因。
- *    legalActions 用它过滤 candidateActions 列出的候选；apply 只用它校验提交的这一个动作，不生成整张列表。
- *    按 View 判定时（legalActionsForView，给只看 View 的策略用），knownStateOfView 把 View 投影到同一个结构，
- *    复用同一份候选和同一个判定函数，所以 legalActionsForView(observe(world, state), world.params)
- *    与 legalActions(world, state) 相同，顺序也相同。
- *    判定函数读不到隐藏信息，所以在只差隐藏信息的两个世界里，同一个非法动作的报错文字完全相同。
+ *    illegalReason(known, action, params) 是唯一的判定函数：合法返回 null，非法返回带编号的原因（IllegalReason，
+ *    见 types.ts），原因的数据只取自 KnownState、params 和提交的动作。
+ *    legalActions 用它过滤 candidateActions 列出的候选；apply 只用它校验提交的这一个动作，不生成整张列表，
+ *    非法时用 formatIllegalReason 把原因写成中文报错抛出。
+ *    按 View 判定时（legalActionsForView 和 illegalReasonForView，给只看 View 的策略和界面用），knownStateOfView
+ *    把 View 投影到同一个结构，复用同一份候选和同一个判定函数，所以 legalActionsForView(observe(world, state), world.params)
+ *    与 legalActions(world, state) 相同，顺序也相同；illegalReasonForView(observe(world, state), world.params, action)
+ *    为 null 当且仅当 apply 接受 action，不为 null 时 apply 的报错就是它写成的中文。
+ *    判定函数读不到隐藏信息，所以在只差隐藏信息的两个世界里，同一个非法动作的原因（编号和数据）和报错文字完全相同。
  *
  * 3. 动作按时间线推进。Timeline 是一个动作执行中的草稿：walkTo 沿 layout.walkPath 逐个门位步行
  *    （含乘电梯），每到一个门位（包括起点和终点），在到达的那一分钟做一次门位观察；然后是动作本身
@@ -30,6 +33,7 @@ import { allRooms, walkMinutes, walkPath } from './layout';
 import type { Params } from './params';
 import type {
   Action,
+  IllegalReason,
   LogEntry,
   MessLevel,
   Minute,
@@ -107,12 +111,24 @@ export function legalActionsForView(view: View, params: Params): Action[] {
 }
 
 /**
+ * 按 View 判定一个动作，给界面和只看 View 的策略用：合法返回 null，非法返回原因（编号加数据，只含玩家已知的信息）。
+ * 界面按编号从语言包取文案，数据填进去。和 legalActions、apply 共用同一个判定：把 View 投影成 KnownState，交给 illegalReason。
+ * 所以对任意状态和动作，illegalReasonForView(observe(world, state), world.params, action) 为 null 当且仅当 apply 接受这个动作，
+ * 不为 null 时 apply 的报错就是这个原因写成的中文。等待按提交的分钟数判定，1 到上限之间的整数都合法。
+ * 阶段 0 的 View 没有待回应的事件，所以不会给出 mustRespond 和 noSuchOption。
+ * View 的房间和 allRooms(params) 的房号、顺序对不上时抛错。不修改 view 和 action，深度冻结的也能用；每次返回新建的对象。
+ */
+export function illegalReasonForView(view: View, params: Params, action: Action): IllegalReason | null {
+  return illegalReason(knownStateOfView(view, params), action, params);
+}
+
+/**
  * 执行一个动作，返回新的状态，并在日志里追加恰好一条记录。
- * 先校验这一个动作的合法性，非法就抛 Error（中文，只写玩家已知的原因）。
+ * 先校验这一个动作的合法性，非法就抛 Error，消息是原因写成的中文（formatIllegalReason，只写玩家已知的信息）。
  */
 export function apply(world: World, state: State, action: Action): State {
   const reason = illegalReason(knownStateOf(world, state), action, world.params);
-  if (reason !== null) throw new Error(reason);
+  if (reason !== null) throw new Error(formatIllegalReason(reason));
 
   const timeline = startTimeline(world, state);
   const outcome = runAction(timeline, action);
@@ -252,29 +268,30 @@ function candidateActions(known: KnownState, params: Params): Action[] {
 }
 
 /**
- * 唯一的合法性判定。合法返回 null，非法返回中文原因，原因里只有玩家已知的信息。
- * 先按优先级处理特殊情况：班次结束、待回应的事件、17:00 之后、强制休息；其余按各动作自己的条件。
+ * 唯一的合法性判定。合法返回 null，非法返回带编号的原因（IllegalReason），数据只取自 known、params 和提交的动作，
+ * 都是玩家已知的信息。先按优先级处理特殊情况：班次结束、待回应的事件、17:00 之后、强制休息；其余按各动作自己的条件。
+ * 每次返回新建的对象。
  */
-function illegalReason(known: KnownState, action: Action, params: Params): string | null {
+function illegalReason(known: KnownState, action: Action, params: Params): IllegalReason | null {
   const { hardStop, breakEarliest, breakLatest } = params.shift;
 
   // 1. 班次已经结束：没有合法动作。
-  if (known.ended !== null) return '班次已经结束';
+  if (known.ended !== null) return { code: 'ended' };
 
   // 2. 有待回应的事件：只能回应（阶段 0 不会出现）。
   if (known.pendingOptions !== null) {
-    if (action.type !== 'respond') return '有事件要先回应';
-    return known.pendingOptions.includes(action.option) ? null : `没有选项 ${action.option}`;
+    if (action.type !== 'respond') return { code: 'mustRespond' };
+    return known.pendingOptions.includes(action.option) ? null : { code: 'noSuchOption', option: action.option };
   }
 
   // 3. 到了 17:00：只能还车，不要求房间做完，也不要求已休息。
   if (known.minute >= hardStop) {
-    return action.type === 'finish' ? null : `${toClock(hardStop)} 已过，只能还车`;
+    return action.type === 'finish' ? null : { code: 'afterHardStop', hardStop };
   }
 
   // 4. 还没休息且到了 14:30（整点也算）：只能休息。此时到达服务间的时刻必然不早于 breakEarliest，不再检查下界。
   if (!known.breakTaken && known.minute >= breakLatest) {
-    return action.type === 'break' ? null : `${toClock(breakLatest)} 起还没休息，现在只能休息`;
+    return action.type === 'break' ? null : { code: 'mustBreak', breakLatest };
   }
 
   // 5. 正常情况。
@@ -283,63 +300,59 @@ function illegalReason(known: KnownState, action: Action, params: Params): strin
       return serviceIllegalReason(known, action.room, params);
     case 'restock': {
       const end = known.minute + walkMinutes(known.place, params.layout.servicePoint, params) + params.cart.restockMinutes;
-      return end <= hardStop ? null : `来不及在 ${toClock(hardStop)} 前补完货`;
+      return end <= hardStop ? null : { code: 'restockTooLate', hardStop };
     }
     case 'call':
-      return known.minute + params.callMinutes <= hardStop ? null : `来不及在 ${toClock(hardStop)} 前打完电话`;
+      return known.minute + params.callMinutes <= hardStop ? null : { code: 'callTooLate', hardStop };
     case 'break': {
-      if (known.breakTaken) return '已经休息过了';
+      if (known.breakTaken) return { code: 'breakAlreadyTaken' };
       // 休息的开始时刻是到达服务间的时刻；没有上界条件。
       const arrival = known.minute + walkMinutes(known.place, params.layout.servicePoint, params);
-      return arrival >= breakEarliest
-        ? null
-        : `${toClock(breakEarliest)} 以后才能休息，现在去服务间 ${toClock(arrival)} 就到了`;
+      return arrival >= breakEarliest ? null : { code: 'breakTooEarly', breakEarliest, arrival };
     }
     case 'wait': {
       const limit = waitLimit(known, params);
       const { minutes } = action;
-      return Number.isInteger(minutes) && minutes >= 1 && minutes <= limit
-        ? null
-        : `每次等待的分钟数要是 1 到 ${limit} 之间的整数`;
+      return Number.isInteger(minutes) && minutes >= 1 && minutes <= limit ? null : { code: 'badWait', limit };
     }
     case 'finish':
       return finishIllegalReason(known);
     case 'respond':
-      return '现在没有要回应的事件';
+      return { code: 'noPrompt' };
     default:
       return unknownActionReason(action);
   }
 }
 
 /** 打扫一间房的条件（正常情况）。按到达门口的时刻判断，所以可以提前出发。 */
-function serviceIllegalReason(known: KnownState, roomId: RoomId, params: Params): string | null {
+function serviceIllegalReason(known: KnownState, roomId: RoomId, params: Params): IllegalReason | null {
   const room = known.rooms.find((candidate) => candidate.id === roomId);
-  if (room === undefined) return `没有房间 ${roomId}`;
-  if (room.doneAt !== null) return `${roomId} 已经做完了`;
-  if (room.kind === 'departure' && !room.flaggedDeparted) return `${roomId} 还没被主管标记为已退`;
-  if (room.kind === 'dnd' && !room.dndLiftKnown) return `${roomId} 挂着请勿打扰，还没得知摘牌`;
+  if (room === undefined) return { code: 'noSuchRoom', room: roomId };
+  if (room.doneAt !== null) return { code: 'roomDone', room: roomId };
+  if (room.kind === 'departure' && !room.flaggedDeparted) return { code: 'notFlagged', room: roomId };
+  if (room.kind === 'dnd' && !room.dndLiftKnown) return { code: 'dndNotLifted', room: roomId };
 
   const { hardStop } = params.shift;
   const arrival = known.minute + walkMinutes(known.place, room.place, params);
   // 到门口时要来得及敲一次门。
-  if (arrival + params.knockRefusedMinutes > hardStop) return `来不及在 ${toClock(hardStop)} 前赶到 ${roomId} 门口`;
+  if (arrival + params.knockRefusedMinutes > hardStop) return { code: 'cannotReachInTime', room: roomId, hardStop };
   if (room.knownAvailableFrom !== null && arrival < room.knownAvailableFrom) {
-    return `${roomId} 的客人说 ${toClock(room.knownAvailableFrom)} 以后再来，现在出发 ${toClock(arrival)} 就到了`;
+    return { code: 'comeBackLater', room: roomId, comeBackAt: room.knownAvailableFrom, arrival };
   }
   // 续做（workDone 大于 0）在第一次开门时已经扣过布草，不再检查。
   const { linen } = roomSpec(room.kind, params);
   if (room.workDone === 0 && known.cart < linen) {
-    return `布草不够：${roomId} 要 ${linen} 份，车里只剩 ${known.cart} 份`;
+    return { code: 'linenShort', room: roomId, needed: linen, cart: known.cart };
   }
   return null;
 }
 
 /** 收工的条件（正常情况）：已休息；退房房和续住房全部完成；已知摘牌的请勿打扰房全部完成。 */
-function finishIllegalReason(known: KnownState): string | null {
-  if (!known.breakTaken) return '还没休息，不能收工';
+function finishIllegalReason(known: KnownState): IllegalReason | null {
+  if (!known.breakTaken) return { code: 'breakNotTaken' };
   // 玩家不知道已经摘牌的请勿打扰房不挡收工。
   const unfinished = known.rooms.filter((room) => room.doneAt === null && (room.kind !== 'dnd' || room.dndLiftKnown));
-  if (unfinished.length > 0) return `还有房间没做完：${unfinished.map((room) => room.id).join('、')}`;
+  if (unfinished.length > 0) return { code: 'roomsLeft', rooms: unfinished.map((room) => room.id) };
   return null;
 }
 
@@ -349,8 +362,60 @@ function waitLimit(known: KnownState, params: Params): Minute {
 }
 
 /** 动作类型的穷举检查：Action 新增类型而这里没处理时，编译报错。运行时收到未知类型就给出原因。 */
-function unknownActionReason(_action: never): string {
-  return '没有这种动作';
+function unknownActionReason(_action: never): IllegalReason {
+  return { code: 'unknownAction' };
+}
+
+/**
+ * apply 报错用的中文：把原因写成一句话，时刻用 toClock 写成钟点。每个编号的句子和改成编号之前判定函数直接返回的
+ * 字符串逐字相同。这是引擎自己的报错，不是界面文字：界面按编号从语言包（src/content）取文案。
+ * 新增编号而这里没写时，编译报错（switch 不完整，函数会缺返回值）。
+ */
+function formatIllegalReason(reason: IllegalReason): string {
+  switch (reason.code) {
+    case 'ended':
+      return '班次已经结束';
+    case 'mustRespond':
+      return '有事件要先回应';
+    case 'noSuchOption':
+      return `没有选项 ${reason.option}`;
+    case 'afterHardStop':
+      return `${toClock(reason.hardStop)} 已过，只能还车`;
+    case 'mustBreak':
+      return `${toClock(reason.breakLatest)} 起还没休息，现在只能休息`;
+    case 'restockTooLate':
+      return `来不及在 ${toClock(reason.hardStop)} 前补完货`;
+    case 'callTooLate':
+      return `来不及在 ${toClock(reason.hardStop)} 前打完电话`;
+    case 'breakAlreadyTaken':
+      return '已经休息过了';
+    case 'breakTooEarly':
+      return `${toClock(reason.breakEarliest)} 以后才能休息，现在去服务间 ${toClock(reason.arrival)} 就到了`;
+    case 'badWait':
+      return `每次等待的分钟数要是 1 到 ${reason.limit} 之间的整数`;
+    case 'noPrompt':
+      return '现在没有要回应的事件';
+    case 'unknownAction':
+      return '没有这种动作';
+    case 'noSuchRoom':
+      return `没有房间 ${reason.room}`;
+    case 'roomDone':
+      return `${reason.room} 已经做完了`;
+    case 'notFlagged':
+      return `${reason.room} 还没被主管标记为已退`;
+    case 'dndNotLifted':
+      return `${reason.room} 挂着请勿打扰，还没得知摘牌`;
+    case 'cannotReachInTime':
+      return `来不及在 ${toClock(reason.hardStop)} 前赶到 ${reason.room} 门口`;
+    case 'comeBackLater':
+      return `${reason.room} 的客人说 ${toClock(reason.comeBackAt)} 以后再来，现在出发 ${toClock(reason.arrival)} 就到了`;
+    case 'linenShort':
+      return `布草不够：${reason.room} 要 ${reason.needed} 份，车里只剩 ${reason.cart} 份`;
+    case 'breakNotTaken':
+      return '还没休息，不能收工';
+    case 'roomsLeft':
+      return `还有房间没做完：${reason.rooms.join('、')}`;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -19,8 +19,9 @@ import {
 } from '../src/engine';
 import { generate } from '../src/engine/generate';
 import { allRooms, walkPath } from '../src/engine/layout';
+import { observe } from '../src/engine/observe';
 import { PARAMS, type Params, type Tier } from '../src/engine/params';
-import { apply, cleanMinutes, initial, legalActions } from '../src/engine/rules';
+import { apply, cleanMinutes, illegalReasonForView, initial, legalActions } from '../src/engine/rules';
 import type { Action, Minute, RoomId, State, World } from '../src/engine/types';
 import {
   act,
@@ -446,12 +447,18 @@ describe('非法动作的报错写明玩家已知的原因', () => {
   });
 });
 
-describe('非法动作的报错不泄露隐藏信息', () => {
-  /** 两个世界的已知状态完全相同；同一个非法动作在两边都抛错，报错文字完全相同。 */
+describe('非法动作的原因和报错不泄露隐藏信息', () => {
+  /**
+   * 两个世界的已知状态完全相同；同一个非法动作在两边都抛错，报错文字完全相同；按 View 判定的原因（编号和数据）也完全相同。
+   * 原因的每个编号和数据另见 illegal-reason.test.ts。
+   */
   function expectSameError(a: World, stateA: State, b: World, stateB: State, action: Action): void {
     expect(stateB).toStrictEqual(stateA);
     expect(legalActions(b, stateB)).toStrictEqual(legalActions(a, stateA));
     expect(expectIllegal(b, stateB, action)).toBe(expectIllegal(a, stateA, action));
+    const reason = illegalReasonForView(observe(a, stateA), a.params, action);
+    expect(reason).not.toBeNull();
+    expect(illegalReasonForView(observe(b, stateB), b.params, action)).toStrictEqual(reason);
   }
 
   it('未标记退房房的退房时刻不同：打扫它、收工的报错相同', () => {

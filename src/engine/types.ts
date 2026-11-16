@@ -97,6 +97,63 @@ export type Action =
   | { readonly type: 'finish' };
 
 // ---------------------------------------------------------------------------
+// IllegalReason：非法动作的原因
+// ---------------------------------------------------------------------------
+
+/**
+ * 一个动作为什么不合法：编号 code，加上写成一句话要用的数据。数据只来自玩家已知的信息：任务单、玩家已经得知的进度、
+ * 公开的参数和提交的动作本身。时刻是开工后第几分钟，显示时再用 clock.ts 换成钟点。
+ * 判定只给出第一条原因，优先级是：班次结束、待回应的事件、17:00 之后、强制休息，然后是各动作自己的条件（见 rules.ts）。
+ * apply 把它写成中文报错抛出；界面按编号从语言包（src/content）取文案，不用引擎的报错文字。
+ */
+export type IllegalReason =
+  /** 班次已经结束，没有合法动作。 */
+  | { readonly code: 'ended' }
+  /** 有待回应的事件，只能回应。阶段 0 没有事件，不会出现。 */
+  | { readonly code: 'mustRespond' }
+  /** 回应时选了待回应的事件里没有的选项。option 是提交的选项编号。阶段 0 不会出现。 */
+  | { readonly code: 'noSuchOption'; readonly option: string }
+  /** 到了 17:00（hardStop），只能还车。 */
+  | { readonly code: 'afterHardStop'; readonly hardStop: Minute }
+  /** 到了 14:30（breakLatest）还没休息，只能休息。 */
+  | { readonly code: 'mustBreak'; readonly breakLatest: Minute }
+  /** 补货：走回服务间再补完，要晚于 17:00。 */
+  | { readonly code: 'restockTooLate'; readonly hardStop: Minute }
+  /** 打给主管：打完要晚于 17:00。 */
+  | { readonly code: 'callTooLate'; readonly hardStop: Minute }
+  /** 休息：已经休息过了。 */
+  | { readonly code: 'breakAlreadyTaken' }
+  /** 休息：现在去服务间，到达的时刻 arrival 早于 10:30（breakEarliest）。 */
+  | { readonly code: 'breakTooEarly'; readonly breakEarliest: Minute; readonly arrival: Minute }
+  /** 等待：分钟数不是 1 到 limit 之间的整数。limit 是这一刻的上限 min(waitStepMinutes, hardStop - minute)。 */
+  | { readonly code: 'badWait'; readonly limit: Minute }
+  /** 回应：现在没有要回应的事件。 */
+  | { readonly code: 'noPrompt' }
+  /** 没有这种动作（类型不认识）。 */
+  | { readonly code: 'unknownAction' }
+  /** 打扫：楼层里没有这个房号。room 是提交的房号。 */
+  | { readonly code: 'noSuchRoom'; readonly room: RoomId }
+  /** 打扫：这间房已经做完了。 */
+  | { readonly code: 'roomDone'; readonly room: RoomId }
+  /** 打扫：退房房还没被主管标记为已退。 */
+  | { readonly code: 'notFlagged'; readonly room: RoomId }
+  /** 打扫：请勿打扰房还没得知摘牌。 */
+  | { readonly code: 'dndNotLifted'; readonly room: RoomId }
+  /** 打扫：到了门口再敲一次门，要晚于 17:00。 */
+  | { readonly code: 'cannotReachInTime'; readonly room: RoomId; readonly hardStop: Minute }
+  /** 打扫：客人说过 comeBackAt 以后再来，现在出发，到达的时刻 arrival 早于它。 */
+  | { readonly code: 'comeBackLater'; readonly room: RoomId; readonly comeBackAt: Minute; readonly arrival: Minute }
+  /** 打扫：第一次开门要扣 needed 份布草，车里只剩 cart 份。 */
+  | { readonly code: 'linenShort'; readonly room: RoomId; readonly needed: number; readonly cart: number }
+  /** 收工：还没休息。 */
+  | { readonly code: 'breakNotTaken' }
+  /** 收工：还有房间没做完，按 world.rooms 的顺序。还不知道摘牌的请勿打扰房不算。 */
+  | { readonly code: 'roomsLeft'; readonly rooms: readonly RoomId[] };
+
+/** 非法动作原因的编号，共 21 个。 */
+export type IllegalReasonCode = IllegalReason['code'];
+
+// ---------------------------------------------------------------------------
 // State：随动作变化的进度
 // ---------------------------------------------------------------------------
 
@@ -290,6 +347,11 @@ export interface Engine {
    * 与 legalActions(world, state) 相同。两者的等待都只列上限那一档，1 到上限之间的整数分钟同样合法。
    */
   legalActionsForView(view: View, params: Params): Action[];
+  /**
+   * 按 View 判定一个动作：合法返回 null，非法返回原因（编号加数据，只含玩家已知的信息）。和 legalActions、apply 共用同一个判定；
+   * 对任意状态，illegalReasonForView(observe(world, state), world.params, action) 为 null 当且仅当 apply 接受这个动作。
+   */
+  illegalReasonForView(view: View, params: Params, action: Action): IllegalReason | null;
   /** 结束的班次的成绩。纯函数；state 和 world 的房间对不上、班次还没结束、判负，或者最后一条日志不是收工还车时抛错。 */
   score(world: World, state: State): Score;
 }
@@ -297,7 +359,7 @@ export interface Engine {
 /**
  * 新手和老手：只能看到 View。必须是无记忆的纯函数：不在决策之间记东西，同一个 View 永远给出同一个动作，
  * 不修改 View，只返回合法动作：legalActionsForView 列出的动作，或者分钟数是 1 到列表里那个等待的分钟数之间
- * 整数的等待，和玩家一样。需要的历史从 view.log 推。传入的 params 就是 world.params，由调用策略的驱动函数
+ * 整数的等待，和玩家一样，也就是 illegalReasonForView 返回 null 的动作。需要的历史从 view.log 推。传入的 params 就是 world.params，由调用策略的驱动函数
  * （runShift，见 drive.ts）保证。
  */
 export type Policy = (view: View, params: Params) => Action;

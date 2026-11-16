@@ -8,7 +8,8 @@
  * 和共用驱动函数 runShift（src/engine/drive.ts）约定的一样：全知拿 world 和 state。全知每个决策点都要搜一遍，比新手慢得多，
  * 所以这里每条性质跑的局数比别的性质测试少。
  *
- * 1. 契约：两种轨迹的每个决策点，返回的动作合法（在 legalActions 里，或者是 1 到列出的上限之间的整数等待）；
+ * 1. 契约：两种轨迹的每个决策点，返回的动作合法（illegalReasonForView 返回 null：和 apply 同一个判定，全知的动作也只能是
+ *    玩家能做的动作，等待的 1 到上限之间的整数分钟都合法）；
  *    同样的输入调两次结果相同（oracle 和 oraclePlan 的第一个动作是两次独立的调用）；几局的决策点混在一起、
  *    打乱调用顺序，结果也相同；交给它的 world 和 state 深度冻结，改了就抛错。接手轨迹都走到了班次结束。
  * 2. 计划和规则一致（oracle.ts 文件开头第 7 条）：两种轨迹的每个决策点，用 apply 重放 oraclePlan 的全部动作，
@@ -22,9 +23,10 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { generate } from '../src/engine/generate';
+import { observe } from '../src/engine/observe';
 import { PARAMS, type Params } from '../src/engine/params';
 import { createRng } from '../src/engine/rng';
-import { initial, legalActions } from '../src/engine/rules';
+import { illegalReasonForView, initial } from '../src/engine/rules';
 import { score } from '../src/engine/score';
 import type { Action, State, World } from '../src/engine/types';
 import { novice } from '../src/policies/novice';
@@ -111,19 +113,12 @@ function decisionStates(...traces: Trace[]): State[] {
   return traces.flatMap((trace) => trace.states.filter((state) => state.ended === null));
 }
 
-/** 合法：在 legalActions 的结果里；或者是等待，这时列表里也有等待，分钟数是 1 到列出的那个等待的分钟数之间的整数。 */
+/**
+ * 合法：按这一步的 View 判定，illegalReasonForView 返回 null。它和 apply 用同一个判定，等待的 1 到上限之间的整数分钟都合法；
+ * 不合法时失败信息里是原因的编号和数据。
+ */
 function expectAllowed(action: Action, world: World, state: State, label: string): void {
-  const legal = legalActions(world, state);
-  if (action.type !== 'wait') {
-    expect(legal, label).toContainEqual(action);
-    return;
-  }
-  const listed = legal.find((candidate) => candidate.type === 'wait');
-  expect(listed, `${label}：这时不能等待`).toBeDefined();
-  const limit = listed?.type === 'wait' ? listed.minutes : 0;
-  expect(Number.isInteger(action.minutes), label).toBe(true);
-  expect(action.minutes, label).toBeGreaterThanOrEqual(1);
-  expect(action.minutes, label).toBeLessThanOrEqual(limit);
+  expect(illegalReasonForView(observe(world, state), world.params, action), `${label} ${JSON.stringify(action)}`).toBeNull();
 }
 
 describe('性质：契约，计划和规则一致', () => {

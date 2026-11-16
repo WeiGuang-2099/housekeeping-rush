@@ -207,9 +207,9 @@ describe('引擎源码：没有随机数和系统时间，不依赖界面', () =
     expect(forbiddenIn(sourceOf('rng.ts'))).toEqual([]);
   });
 
-  it('去掉注释以后代码还在：rules.ts 的五个对外函数都还在', () => {
+  it('去掉注释以后代码还在：rules.ts 的六个对外函数都还在', () => {
     const code = stripComments(sourceOf('rules.ts'));
-    for (const name of ['initial', 'legalActions', 'legalActionsForView', 'apply', 'cleanMinutes']) {
+    for (const name of ['initial', 'legalActions', 'legalActionsForView', 'illegalReasonForView', 'apply', 'cleanMinutes']) {
       expect(code, name).toMatch(new RegExp(`export function ${name}\\(`));
     }
   });

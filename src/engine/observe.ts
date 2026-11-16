@@ -26,7 +26,7 @@
  *    score 和各参与者的 State；回放里"当时知道什么"，就是对那一步的状态再调一次 observe。
  *
  * 7. 纯函数。不修改 world、state，没有随机数，不读系统时间；同样的输入给出相同的输出。
- *    不导入 rules.ts（按 View 判定合法动作的 legalActionsForView 在 rules.ts 里）。
+ *    不导入 rules.ts（按 View 判定合法动作的 legalActionsForView 和非法动作原因的 illegalReasonForView 在 rules.ts 里）。
  */
 
 import type { RoomProgress, RoomTruth, RoomView, State, View, World } from './types';

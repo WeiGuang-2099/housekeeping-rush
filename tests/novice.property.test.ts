@@ -10,8 +10,8 @@
  *
  * 1. 契约（docs/DESIGN.md 的"策略的契约"）：两种轨迹的每个决策点，返回的动作合法；同一个 View 调两次结果相同；
  *    几个班次的决策点混在一起、打乱调用顺序，结果也相同（在决策之间记东西的写法会在这里露馅）；交给它的 View 深度冻结，
- *    改了就抛错。合法按 View 判定：在 legalActionsForView 的结果里，或者是分钟数为 1 到列出的那个等待的分钟数之间
- *    整数的等待。阶段 1 有了 illegalReasonForView 以后改用它判定。
+ *    改了就抛错。合法按 View 判定：illegalReasonForView 返回 null，和 apply 用的是同一个判定，等待的分钟数是 1 到上限之间的
+ *    整数都合法（legalActionsForView 只列上限那一档）。
  * 2. 行为不泄露（docs/DESIGN.md 的"公平性约束"第 2 道）：在世界 A 上跑完接手轨迹，用 hideDifferently 造只差
  *    A 跑完时仍未揭晓的隐藏信息、种子也不同的世界 B，同样地重跑，动作序列和终态必须完全相同。
  *    模拟器和界面里的幽灵用共用驱动函数 runShift，所以同样的检查在 runShift 上再跑一遍：先按下标随机走几步，
@@ -33,7 +33,7 @@ import { walkMinutes } from '../src/engine/layout';
 import { observe } from '../src/engine/observe';
 import { PARAMS, type Params } from '../src/engine/params';
 import { createRng } from '../src/engine/rng';
-import { legalActions, legalActionsForView } from '../src/engine/rules';
+import { illegalReasonForView, legalActions, legalActionsForView } from '../src/engine/rules';
 import type { Action, Minute, Policy, RoomId, State, View, World } from '../src/engine/types';
 import { novice } from '../src/policies/novice';
 import { hideDifferently } from './helpers/hidden';
@@ -121,21 +121,11 @@ function viewOf(world: World, state: State): View {
 }
 
 /**
- * 按 View 判定合法：在 legalActionsForView 的结果里；或者是等待，这时列表里也有等待，分钟数是 1 到列出的那个等待的
- * 分钟数之间的整数（列表只列上限那一档）。
+ * 按 View 判定合法：illegalReasonForView 返回 null。它和 apply 用同一个判定，等待的 1 到上限之间的整数分钟都合法；
+ * 不合法时失败信息里是原因的编号和数据。
  */
 function expectAllowed(action: Action, view: View, params: Params, label: string): void {
-  const legal = legalActionsForView(view, params);
-  if (action.type !== 'wait') {
-    expect(legal, label).toContainEqual(action);
-    return;
-  }
-  const listed = legal.find((candidate) => candidate.type === 'wait');
-  expect(listed, `${label}：这时不能等待`).toBeDefined();
-  const limit = listed?.type === 'wait' ? listed.minutes : 0;
-  expect(Number.isInteger(action.minutes), label).toBe(true);
-  expect(action.minutes, label).toBeGreaterThanOrEqual(1);
-  expect(action.minutes, label).toBeLessThanOrEqual(limit);
+  expect(illegalReasonForView(view, params, action), `${label} ${JSON.stringify(action)}`).toBeNull();
 }
 
 /** 对照规则算出的动作，以及这一步落在哪几种情形里（报错信息和自检用）。 */
