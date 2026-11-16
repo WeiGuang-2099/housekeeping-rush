@@ -251,16 +251,24 @@ export interface View {
 // Score
 // ---------------------------------------------------------------------------
 
+/** 一个结束的班次的成绩，由 score 计算，规则见 score.ts 和 docs/DESIGN.md 的"计分"。只有数字和布尔值。 */
 export interface Score {
-  /** 还车完成的时刻。 */
+  /** 还车完成的时刻，即最后一条日志（收工还车）的 end。 */
   finishMinute: Minute;
-  /** 各项罚时，单位分钟。 */
+  /**
+   * 各项罚时的合计，单位分钟：超时的贵宾房、超时的催房房间、未完成的房间，各按间数乘 params.penalties 里的每间罚时。
+   * 没做完的贵宾房和催房房间既算超时又算未完成，两项叠加。
+   */
   penalties: { vipLate: Minute; rushLate: Minute; unfinished: Minute };
   /** 等效下班时间：finishMinute 加全部罚时。越小越好，是唯一的成绩。 */
   equivalentFinish: Minute;
+  /** 做完的房间数（doneAt 不为 null），含请勿打扰房。 */
   roomsDone: number;
+  /** 全班走路的分钟数，各条日志的 walk 之和。 */
   walkedMinutes: Minute;
+  /** 本班有没有违规（阶段 2 的操守事件）。违规的班次不计星，不加罚时。 */
   violation: boolean;
+  /** 判负。阶段 0 恒为 false：判负的班次 score 直接抛错，怎么计分到阶段 2 再定。 */
   failed: boolean;
 }
 
@@ -282,6 +290,7 @@ export interface Engine {
    * 与 legalActions(world, state) 相同。两者的等待都只列上限那一档，1 到上限之间的整数分钟同样合法。
    */
   legalActionsForView(view: View, params: Params): Action[];
+  /** 结束的班次的成绩。纯函数；state 和 world 的房间对不上、班次还没结束、判负，或者最后一条日志不是收工还车时抛错。 */
   score(world: World, state: State): Score;
 }
 

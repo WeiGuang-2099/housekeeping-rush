@@ -1,8 +1,8 @@
 /**
  * 性质测试共用的辅助：fast-check 的生成器、每条性质的规模和时限，按下标跑随机合法序列的 playShift，
- * 以及取下标、深度冻结、收集对象的小工具。rules 和 observe 的性质测试都从这里导入。
+ * 以及取下标、深度冻结、收集对象的小工具。rules、observe 和 score 的性质测试都从这里导入。
  *
- * fast-check 生成种子字符串、难度档和一串下标；第 k 步取 legalActions[下标 % 长度]，下标循环使用。
+ * fast-check 生成种子字符串、难度档和一串下标；默认的挑法是第 k 步取 legalActions[下标 % 长度]，下标循环使用。
  * 这里只调用引擎和普通的数组操作，不调用 expect。
  */
 
@@ -26,6 +26,18 @@ export const RUNS = 100;
 /** 单个性质测试的时限（毫秒）。正常只要一两秒，留足余量给慢机器。 */
 export const TIMEOUT = 60_000;
 
+/**
+ * 按下标挑动作的挑法：从第 step 步的合法动作 legal 里挑一个。world 和 state 是这一步的世界和状态，
+ * 挑法只该读玩家已知的部分（任务单上的房型、状态里已知的进度）。playShift 默认用 choose，它只看合法动作和下标。
+ */
+export type Chooser = (
+  legal: readonly Action[],
+  picks: readonly number[],
+  step: number,
+  world: World,
+  state: State,
+) => Action;
+
 /** 第 step 步取 legal[下标 % 长度]。 */
 export function choose(legal: readonly Action[], picks: readonly number[], step: number): Action {
   const pick = picks[step % picks.length] ?? 0;
@@ -43,10 +55,15 @@ export interface Trace {
 }
 
 /**
- * 从开工起按下标选动作，跑到班次结束，或跑满 maxSteps 步。
+ * 从开工起按下标选动作，跑到班次结束，或跑满 maxSteps 步。挑法默认是 choose，可以换成别的 Chooser。
  * 只调用引擎和普通的数组操作，不调用 expect，所以也能放进替换了 Math.random 的那段代码里。
  */
-export function playShift(world: World, picks: readonly number[], maxSteps = Number.POSITIVE_INFINITY): Trace {
+export function playShift(
+  world: World,
+  picks: readonly number[],
+  maxSteps = Number.POSITIVE_INFINITY,
+  chooser: Chooser = choose,
+): Trace {
   // 每个动作至少推进 1 分钟，班次一定在 hardStop + 事件数 + 1 步之内结束。
   const limit = world.params.shift.hardStop + world.events.length + 1;
   let state = initial(world);
@@ -54,7 +71,7 @@ export function playShift(world: World, picks: readonly number[], maxSteps = Num
   const actions: Action[] = [];
   while (state.ended === null && actions.length < maxSteps) {
     if (actions.length >= limit) throw new Error(`走了 ${limit} 步，班次还没结束`);
-    const action = choose(legalActions(world, state), picks, actions.length);
+    const action = chooser(legalActions(world, state), picks, actions.length, world, state);
     state = apply(world, state, action);
     states.push(state);
     actions.push(action);

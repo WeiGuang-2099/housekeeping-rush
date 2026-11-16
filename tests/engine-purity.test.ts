@@ -128,10 +128,10 @@ function sourceOf(file: string): string {
 }
 
 describe('引擎源码：没有随机数和系统时间，不依赖界面', () => {
-  it('读到了引擎的源码，至少有 rules.ts、generate.ts、rng.ts、types.ts、observe.ts', () => {
+  it('读到了引擎的源码，至少有 rules.ts、generate.ts、rng.ts、types.ts、observe.ts、score.ts', () => {
     // 一个文件都没读到时，下面逐个文件的检查会空过，所以先确认读到了。
     expect(Object.keys(SOURCES).map(fileName)).toEqual(
-      expect.arrayContaining(['rules.ts', 'generate.ts', 'rng.ts', 'types.ts', 'observe.ts']),
+      expect.arrayContaining(['rules.ts', 'generate.ts', 'rng.ts', 'types.ts', 'observe.ts', 'score.ts']),
     );
     for (const [path, source] of Object.entries(SOURCES)) expect(source.length, path).toBeGreaterThan(0);
   });
