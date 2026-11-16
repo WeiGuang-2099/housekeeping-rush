@@ -51,8 +51,9 @@ export function choose(legal: readonly Action[], picks: readonly number[], step:
 /**
  * 把只看 View 的策略当挑法。第 step 步（从 0 数）在 takeOverAt 之前按下标挑（choose），从 takeOverAt 起交给策略，
  * 一直到班次结束。takeOverAt 为 0 就是整班都由策略来做；大于 0 时像棋钟超时以后，新手从玩家的局面接着做。
- * 交给策略的只有 observe(world, state) 的结果（先深度冻结）和 world.params，和模拟器的共用驱动函数约定的一样：
- * 策略拿不到 world、state、合法动作和下标。策略返回非法动作时，playShift 里的 apply 会抛错。
+ * 交给策略的只有 observe(world, state) 的结果（先深度冻结）和 world.params，和共用驱动函数 runShift
+ * （src/engine/drive.ts，模拟器和界面里的幽灵用它）约定的一样：策略拿不到 world、state、合法动作和下标。
+ * 策略返回非法动作时，playShift 里的 apply 会抛错。tests/drive.test.ts 核对两者走出的轨迹相同。
  */
 export function policyChooser(policy: Policy, takeOverAt = 0): Chooser {
   return (legal, picks, step, world, state) =>

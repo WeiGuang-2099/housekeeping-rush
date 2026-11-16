@@ -6,7 +6,7 @@
  * （新手自己走不到）、17:00 以后、布草为 0、人不在服务间那一层（标准档就是 13 楼）这些局面；
  * 接手轨迹先按下标随机走几步，再交给新手一直做到班次结束
  * （从第 0 步接手就是整班都由新手做），像棋钟超时以后新手从玩家的局面接着做。交给新手的只有 observe 的结果（深度冻结）
- * 和 world.params（tests/helpers/play.ts 的 policyChooser），和模拟器的共用驱动函数约定的一样。
+ * 和 world.params（tests/helpers/play.ts 的 policyChooser），和共用驱动函数 runShift（src/engine/drive.ts）约定的一样。
  *
  * 1. 契约（docs/DESIGN.md 的"策略的契约"）：两种轨迹的每个决策点，返回的动作合法；同一个 View 调两次结果相同；
  *    几个班次的决策点混在一起、打乱调用顺序，结果也相同（在决策之间记东西的写法会在这里露馅）；交给它的 View 深度冻结，
@@ -14,17 +14,20 @@
  *    整数的等待。阶段 1 有了 illegalReasonForView 以后改用它判定。
  * 2. 行为不泄露（docs/DESIGN.md 的"公平性约束"第 2 道）：在世界 A 上跑完接手轨迹，用 hideDifferently 造只差
  *    A 跑完时仍未揭晓的隐藏信息、种子也不同的世界 B，同样地重跑，动作序列和终态必须完全相同。
+ *    模拟器和界面里的幽灵用共用驱动函数 runShift，所以同样的检查在 runShift 上再跑一遍：先按下标随机走几步，
+ *    再从那个状态用 runShift 交给新手做完，两个世界上每一步的状态和动作都相同。
  * 3. 对照新手规则：两种轨迹的每个决策点，新手的动作和按 novice.ts 文件开头的规则直接算出的动作完全相同。
  *    对照不调用新手，也不用新手"满车再判定一次"的写法，而是按 docs/DESIGN.md 的打扫条件逐条写；只读玩家已知的部分
  *    （任务单上的房型和位置、状态里已知的进度）和 params。
  * 4. 数值从 params 读：ODD_PARAMS 里新手用到的每项数值都和三档不同（numbersUsedByNovice），上面三条都在 ODD_PARAMS 下跑。
  * 5. 自检（样本都用 fc.sample 配固定种子抽，每次运行都是同一批）：随机轨迹确实走到 14:30 以后还没休息、17:00 以后、
  *    布草为 0、人不在服务间那一层；对照规则的每一种情形都走到了；从闭包里看真实世界或种子的作弊策略，
- *    在世界 B 上会走出和 A 不同的动作，第 2 条抓得到它。
+ *    在世界 B 上会走出和 A 不同的动作，第 2 条抓得到它（用 policyChooser 和 runShift 驱动都一样）。
  */
 
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { runShift, type ShiftRun } from '../src/engine/drive';
 import { generate } from '../src/engine/generate';
 import { walkMinutes } from '../src/engine/layout';
 import { observe } from '../src/engine/observe';
@@ -100,6 +103,11 @@ function shiftOf(input: ShiftInput): Shift {
     random: playShift(world, input.picks),
     takeOver: playShift(world, input.picks, Number.POSITIVE_INFINITY, policyChooser(novice, input.takeOverAt)),
   };
+}
+
+/** 用共用驱动函数跑：先按下标随机走 takeOverAt 步（班次提前结束就停），再从那个状态用 runShift 交给新手做完。 */
+function driveNovice(world: World, input: ShiftInput): ShiftRun {
+  return runShift(world, { kind: 'view', policy: novice }, lastOf(playShift(world, input.picks, input.takeOverAt).states));
 }
 
 /** 几条轨迹里全部的决策点：班次还没结束的状态。 */
@@ -272,6 +280,25 @@ describe('性质：行为不泄露', () => {
     },
     TIMEOUT,
   );
+
+  it(
+    '用共用驱动函数 runShift 跑：先按下标随机走几步，再从那个状态交给新手做完；在世界 B 上同样地重跑，每一步的状态和动作完全相同',
+    () => {
+      fc.assert(
+        fc.property(shiftArb, noiseArb, (input, noise) => {
+          const world = generate(input.seed, PARAM_SETS[input.set]);
+          const a = driveNovice(world, input);
+          const other = hideDifferently(world, a.final, noise);
+          expect(other.seed).not.toBe(world.seed);
+          const b = driveNovice(other, input);
+          expect(b.actions).toStrictEqual(a.actions);
+          expect(b.states).toStrictEqual(a.states);
+        }),
+        { numRuns: RUNS },
+      );
+    },
+    TIMEOUT,
+  );
 });
 
 describe('性质：对照新手规则', () => {
@@ -386,23 +413,36 @@ describe('自检', () => {
     expect(missing, JSON.stringify(Object.fromEntries(counts))).toEqual([]);
   });
 
-  it('从闭包里看客人出门时刻或种子的作弊策略，在世界 B 上走出和 A 不同的动作，不泄露性质抓得到；老实的新手一局也不会', () => {
+  it('从闭包里看客人出门时刻或种子的作弊策略，在世界 B 上走出和 A 不同的动作，不泄露性质抓得到（用 policyChooser 和 runShift 驱动都一样）；老实的新手一局也不会', () => {
     // 整班都由策略做（看种子的作弊策略只在开工第一步作弊），世界 B 的构造和不泄露性质相同。
     const samples = fc.sample(fc.tuple(fc.constantFrom(...SET_NAMES), seedArb, noiseArb), {
       numRuns: 50,
       seed: SAMPLE_SEED,
     });
-    const diverging = (policyFor: (world: World) => Policy): number =>
-      samples.filter(([set, seed, noise]) => {
-        const world = generate(seed, PARAM_SETS[set]);
-        const a = playShift(world, [0], Number.POSITIVE_INFINITY, policyChooser(policyFor(world)));
-        const other = hideDifferently(world, lastOf(a.states), noise);
-        const b = playShift(other, [0], Number.POSITIVE_INFINITY, policyChooser(policyFor(other)));
-        return JSON.stringify(b.actions) !== JSON.stringify(a.actions);
-      }).length;
-    expect(diverging(() => novice)).toBe(0);
-    expect(diverging(peekingAtGuests)).toBeGreaterThan(0);
-    // B 的种子比 A 多 7 个字符，长度的奇偶一定不同：每一局都在第一步分叉。
-    expect(diverging(peekingAtSeed)).toBe(samples.length);
+    /** 让策略从开工起做完一班的两种驱动方式，返回动作序列和结束时的状态。 */
+    const drivers: readonly [string, (world: World, policy: Policy) => { actions: readonly Action[]; final: State }][] = [
+      [
+        'policyChooser',
+        (world, policy) => {
+          const trace = playShift(world, [0], Number.POSITIVE_INFINITY, policyChooser(policy));
+          return { actions: trace.actions, final: lastOf(trace.states) };
+        },
+      ],
+      ['runShift', (world, policy) => runShift(world, { kind: 'view', policy })],
+    ];
+    for (const [name, drive] of drivers) {
+      const diverging = (policyFor: (world: World) => Policy): number =>
+        samples.filter(([set, seed, noise]) => {
+          const world = generate(seed, PARAM_SETS[set]);
+          const a = drive(world, policyFor(world));
+          const other = hideDifferently(world, a.final, noise);
+          const b = drive(other, policyFor(other));
+          return JSON.stringify(b.actions) !== JSON.stringify(a.actions);
+        }).length;
+      expect(diverging(() => novice), name).toBe(0);
+      expect(diverging(peekingAtGuests), name).toBeGreaterThan(0);
+      // B 的种子比 A 多 7 个字符，长度的奇偶一定不同：每一局都在第一步分叉。
+      expect(diverging(peekingAtSeed), name).toBe(samples.length);
+    }
   });
 });

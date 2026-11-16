@@ -12,7 +12,7 @@ No reflexes are involved. You and the ghosts choose from the same set of actions
 
 ## Status
 
-The engine is partly built: the types, the tuning parameters, seeded world generation, the core shift rules, the player's view and scoring are in place, and so are two of the ghosts: the greedy novice and an approximate oracle, a beam search with full information that an exact solver will replace later. Events during the shift, the veteran and the interface are not implemented yet.
+The engine is partly built: the types, the tuning parameters, seeded world generation, the core shift rules, the player's view and scoring are in place, and so are two of the ghosts: the greedy novice and an approximate oracle, a beam search with full information that an exact solver will replace later. A batch simulator plays both ghosts on the same fixed seeds and prints an evaluation table. Events during the shift, the veteran and the interface are not implemented yet.
 
 ## Getting started
 
@@ -21,7 +21,10 @@ npm install
 npm run dev
 npm test
 npm run build
+npm run sim
 ```
+
+`npm run sim` plays 1000 seeds on each difficulty tier (about a minute); `npm run sim -- --seeds 100 --tier tight` runs a smaller batch.
 
 Requires Node 22.12 or newer.
 

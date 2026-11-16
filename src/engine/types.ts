@@ -230,7 +230,7 @@ export interface RoomView {
 /**
  * 玩家和只看 View 的策略能看到的全部，由 observe 按白名单逐字段构造。
  * 不含种子、参数、事件表和已触发事件的下标；不和 World、params 共用对象，日志条目和 State 共用。
- * 字段都是只读的；策略不能修改 View（测试和模拟器会把交给策略的 View 深度冻结）。
+ * 字段都是只读的；策略不能修改 View（测试和共用驱动函数 runShift 会把交给策略的 View 深度冻结）。
  */
 export interface View {
   readonly minute: Minute;
@@ -297,7 +297,8 @@ export interface Engine {
 /**
  * 新手和老手：只能看到 View。必须是无记忆的纯函数：不在决策之间记东西，同一个 View 永远给出同一个动作，
  * 不修改 View，只返回合法动作：legalActionsForView 列出的动作，或者分钟数是 1 到列表里那个等待的分钟数之间
- * 整数的等待，和玩家一样。需要的历史从 view.log 推。传入的 params 就是 world.params，由调用策略的驱动函数保证。
+ * 整数的等待，和玩家一样。需要的历史从 view.log 推。传入的 params 就是 world.params，由调用策略的驱动函数
+ * （runShift，见 drive.ts）保证。
  */
 export type Policy = (view: View, params: Params) => Action;
 

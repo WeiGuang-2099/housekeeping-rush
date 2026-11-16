@@ -6,7 +6,8 @@
  *    才能去；请勿打扰房要打电话，或者路过、停留在它的门位，得知摘牌以后才能去。知道隐藏信息不等于可以直接去，
  *    所以打电话和路过、停留也在计划里。返回的动作在 legalActions(world, state) 里，等待是 1 到列出的上限之间的
  *    整数分钟；返回之前用 legalActions 核对一遍，不合法就抛错（说明第 7 条的模型和规则对不上）。
- *    纯函数：不在决策之间记东西，同样的 world 和 state 给出同样的动作，不修改传入的参数，没有随机数。
+ *    纯函数：不在决策之间记东西，同样的 world 和 state 给出同样的动作，不修改传入的参数，没有随机数
+ *    （第 5 条新手的走法交给 runShift，它会冻结 state 里的日志条目，值不变，见 src/engine/drive.ts）。
  *    数值都从 world.params 读，束宽是 params.oracle.beamWidth。只从引擎的对外入口和新手（./novice，见第 5 条）导入，
  *    不导入 generate，也用不着种子（tests/engine-purity.test.ts 检查）。班次结束以后调用会抛错。
  *
@@ -39,7 +40,7 @@
  *    休息、补货、电话和步行的下界，不早于每间房最早能做完的时刻，再加上已有的罚时和看得出来躲不掉的罚时
  *    （赶不上的时限、17:00 前做不完的房间）。只在同一层里比较，不要求是下界。
  *
- * 5. 不比新手差。新手从这个状态起做到收工的走法（按规则真的走一遍）也是候选，严格更好时用它的第一个动作。
+ * 5. 不比新手差。新手从这个状态起做到收工的走法（用共用驱动函数 runShift 按规则真的走一遍）也是候选，严格更好时用它的第一个动作。
  *    所以每一步的计划都不比新手从这一步接着做差。实际做出来的结果因为第 2 条的重新规划，不严格保证这一点，
  *    测试在一批固定的种子上核对平均成绩不差于新手。
  *
@@ -59,10 +60,9 @@
  */
 
 import {
-  apply,
   cleanMinutes,
   legalActions,
-  observe,
+  runShift,
   score,
   walkMinutes,
   walkPath,
@@ -138,18 +138,13 @@ function sameAction(a: Action, b: Action): boolean {
 // 新手的走法（文件开头第 5 条）
 // ---------------------------------------------------------------------------
 
-/** 新手从 state 起做到收工：每一步交给它 observe 的结果和 world.params，用 apply 执行，最后用 score 计分。 */
+/**
+ * 新手从 state 起做到收工：交给共用驱动函数 runShift（每一步只给新手 observe 的结果和 world.params，用 apply 执行），
+ * 最后用 score 计分。
+ */
 function novicePlan(world: World, state: State): OraclePlan {
-  const limit = world.params.shift.hardStop + world.events.length + 1;
-  const actions: Action[] = [];
-  let current = state;
-  while (current.ended === null) {
-    if (actions.length >= limit) throw new Error(`全知：新手走了 ${limit} 步，班次还没结束`);
-    const action = novice(observe(world, current), world.params);
-    actions.push(action);
-    current = apply(world, current, action);
-  }
-  return { actions, equivalentFinish: score(world, current).equivalentFinish, source: 'novice' };
+  const run = runShift(world, { kind: 'view', policy: novice }, state);
+  return { actions: run.actions, equivalentFinish: score(world, run.final).equivalentFinish, source: 'novice' };
 }
 
 // ---------------------------------------------------------------------------
