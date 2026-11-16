@@ -1,15 +1,17 @@
 /**
  * 性质测试共用的辅助：fast-check 的生成器、每条性质的规模和时限，按下标跑随机合法序列的 playShift，
- * 以及取下标、深度冻结、收集对象的小工具。rules、observe 和 score 的性质测试都从这里导入。
+ * 把只看 View 的策略当挑法的 policyChooser，以及取下标、深度冻结、收集对象的小工具。
+ * rules、observe、score 和新手的性质测试都从这里导入。
  *
  * fast-check 生成种子字符串、难度档和一串下标；默认的挑法是第 k 步取 legalActions[下标 % 长度]，下标循环使用。
  * 这里只调用引擎和普通的数组操作，不调用 expect。
  */
 
 import fc from 'fast-check';
+import { observe } from '../../src/engine/observe';
 import type { Tier } from '../../src/engine/params';
 import { apply, initial, legalActions } from '../../src/engine/rules';
-import type { Action, State, World } from '../../src/engine/types';
+import type { Action, Policy, State, World } from '../../src/engine/types';
 
 /** 三个难度档。 */
 export const TIERS = ['standard', 'tight', 'weekend'] as const satisfies readonly Tier[];
@@ -44,6 +46,17 @@ export function choose(legal: readonly Action[], picks: readonly number[], step:
   const action = legal[pick % legal.length];
   if (action === undefined) throw new Error(`第 ${step} 步没有合法动作`);
   return action;
+}
+
+/**
+ * 把只看 View 的策略当挑法。第 step 步（从 0 数）在 takeOverAt 之前按下标挑（choose），从 takeOverAt 起交给策略，
+ * 一直到班次结束。takeOverAt 为 0 就是整班都由策略来做；大于 0 时像棋钟超时以后，新手从玩家的局面接着做。
+ * 交给策略的只有 observe(world, state) 的结果（先深度冻结）和 world.params，和模拟器的共用驱动函数约定的一样：
+ * 策略拿不到 world、state、合法动作和下标。策略返回非法动作时，playShift 里的 apply 会抛错。
+ */
+export function policyChooser(policy: Policy, takeOverAt = 0): Chooser {
+  return (legal, picks, step, world, state) =>
+    step < takeOverAt ? choose(legal, picks, step) : policy(deepFreeze(observe(world, state)), world.params);
 }
 
 /** playShift 的结果：世界，以及每一步的状态和动作。 */

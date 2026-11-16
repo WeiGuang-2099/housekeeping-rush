@@ -114,6 +114,14 @@ export interface Params {
 
   /** 三星要求：遗憾值不超过这么多分钟。 */
   stars: { threeStarRegret: Minute };
+
+  /**
+   * 新手幽灵（src/policies/novice.ts）用的数值。它只看 View，数值同样从这里读，策略里不写魔法数字。
+   * breakAt 是新手固定去休息的时刻，12:30：还没休息，到了这个时刻，下一个动作就是回服务间休息。
+   * 它不早于 shift.breakEarliest、早于 shift.breakLatest，这样到了它就一定能休息（tests/params.test.ts 检查三档）。
+   * 这不是规则，玩家和别的幽灵什么时候休息都行。
+   */
+  novice: { breakAt: Minute };
 }
 
 const STANDARD: Params = {
@@ -195,6 +203,9 @@ const STANDARD: Params = {
   penalties: { vipLate: 30, rushLate: 20, unfinished: 45 },
 
   stars: { threeStarRegret: 10 },
+
+  // 12:30。三档取同一个值：紧档和周末档由标准档展开，共用这个对象。
+  novice: { breakAt: 240 },
 };
 
 /** 周四周五档：布草车减到 6 份。 */

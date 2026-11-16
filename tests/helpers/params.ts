@@ -1,8 +1,10 @@
 /**
- * 性质测试用的一套参数 ODD_PARAMS，以及确认它和三档确实都不同的 numbersUsedByRules、numbersUsedByScore。
+ * 性质测试用的一套参数 ODD_PARAMS，以及确认它和三档确实都不同的 numbersUsedByRules、numbersUsedByScore、
+ * numbersUsedByNovice。
  *
  * ODD_PARAMS 的楼层和房号，以及 rules 用到的每项数值（见 numbersUsedByRules）、score 用到的每项数值
- * （见 numbersUsedByScore）都和三档不同，用来检查 rules、legalActionsForView 和 score 的数值都从传入的参数读。
+ * （见 numbersUsedByScore）、新手用到的每项数值（见 numbersUsedByNovice）都和三档不同，用来检查 rules、
+ * legalActionsForView、score 和新手的数值都从传入的参数读。
  * 其余各项里，下面这些沿用标准档：tier 仍是 'standard'；客人、线索、退房和请勿打扰的分布，事件、星级就是标准档的
  * 同一个对象；退房房和续住房的间数、服务间的门位也和标准档相同。开工前的时刻（-45）、目标下班时间（400）、
  * 请勿打扰房的间数（3）和贵宾时限（[250]）也换了，和三档都不同，但 rules 和 score 不读它们（score 读的贵宾时限
@@ -14,10 +16,11 @@ import { allRooms } from '../../src/engine/layout';
 import { PARAMS, type Params } from '../../src/engine/params';
 
 /**
- * rules 和 score 用到的每项数值都和三档不同的参数：楼层和房号、服务间所在楼层、步行和电梯、各项耗时、布草、脏乱系数、
- * 休息窗口、17:00 和三项罚时都换了。rules 或 score 里只要有一处没从 world.params 读（写死了数值，或直接引用 PARAMS），
- * tests/rules.property.test.ts 里"数值都从 world.params 读"的性质，或者 tests/score.property.test.ts、
- * tests/score.test.ts 里用 ODD_PARAMS 跑的计分就会失败。
+ * rules、score 和新手用到的每项数值都和三档不同的参数：楼层和房号、服务间所在楼层、步行和电梯、各项耗时、布草、脏乱系数、
+ * 休息窗口、17:00、三项罚时和新手的休息时刻都换了。rules 或 score 里只要有一处没从 world.params 读（写死了数值，
+ * 或直接引用 PARAMS），tests/rules.property.test.ts 里"数值都从 world.params 读"的性质，或者 tests/score.property.test.ts、
+ * tests/score.test.ts 里用 ODD_PARAMS 跑的计分就会失败；新手没从传入的 params 读，tests/novice.property.test.ts 里
+ * 用 ODD_PARAMS 跑的"对照新手规则"和 tests/novice.test.ts 里用 ODD_PARAMS 的用例就会失败。
  * 最晚的强制休息：任意位置到任意房间最远是 {3, 3} 到 {5, 5}，(3 + 5) × 2 + 3 = 19 分钟；最长的打扫是 40 × 1.5 = 60；
  * 回服务间 {5, 0} 最远是 {5, 5}，5 × 2 = 10 分钟。(300 - 1) + (19 + 60) + 10 + 20 = 408，仍在 480 之前结束。
  */
@@ -54,6 +57,9 @@ export const ODD_PARAMS: Params = {
   vipDeadlines: [250],
   // 三项各不相同，也和三档的 30、20、45 都不同。
   penalties: { vipLate: 35, rushLate: 25, unfinished: 50 },
+  // 新手的休息时刻：三档都是 240（12:30）。200 在这套参数的休息窗口 [100, 300) 里，也不等于 100 和 300，
+  // 新手写死 240、或者错读成 breakEarliest、breakLatest，都会在 200 之后的第一个决策点和这里对不上。
+  novice: { breakAt: 200 },
 };
 
 /** rules 用到的每一项数值，用来确认 ODD_PARAMS 和三档都不同。 */
@@ -91,5 +97,20 @@ export function numbersUsedByScore(params: Params): Record<string, number> {
     vipLate: params.penalties.vipLate,
     rushLate: params.penalties.rushLate,
     unfinished: params.penalties.unfinished,
+  };
+}
+
+/**
+ * 新手（src/policies/novice.ts）直接读的每一项数值，用来确认 ODD_PARAMS 和三档都不同：休息时刻、17:00、
+ * 布草车的容量，以及它算步行分钟时 walkMinutes 读的两项。它判定合法动作时经由 legalActionsForView 读的数值
+ * 见 numbersUsedByRules。
+ */
+export function numbersUsedByNovice(params: Params): Record<string, number> {
+  return {
+    breakAt: params.novice.breakAt,
+    hardStop: params.shift.hardStop,
+    capacity: params.cart.capacity,
+    walkMinutesPerDoor: params.layout.walkMinutesPerDoor,
+    liftMinutes: params.layout.liftMinutes,
   };
 }

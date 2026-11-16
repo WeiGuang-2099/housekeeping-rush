@@ -14,12 +14,30 @@
  * 这里把 src/engine 下的源码当文本读进来，去掉注释以后按单词查这些名字。
  * 字符串字面量不做特别处理：引擎源码里没有含这些名字或注释符号的字符串。
  * 这些检查防的是无意中写进去的依赖和 API；故意拼出来的加载（eval、new Worker 之类）认不出，靠代码审查。
+ *
+ * 策略（src/policies 下的源码，含子目录）做同样的禁用名字检查：策略也不依赖界面，能在 Node 里直接跑（硬约束 7），
+ * 也不用 Math.random、系统时间和 import.meta。另外守住 docs/DESIGN.md 公平性约束的第 3 道里的静态检查：
+ * 只看 View 的策略拿不到 World，可是引擎公开的 generate 能按种子重建整个世界。策略按约定从 src/engine/index.ts 导入，
+ * generate 也经它转出，所以按导入的名字查，不按模块路径查：
+ * - import 和 export ... from 的导入子句（关键字和 from 之间的部分）里不许出现 generate 这个名字，别名、转出也算；
+ * - 不许对模块整体导入（import * as、export * from、require）：整体导入以后用 engine.generate，按名字就查不到了；
+ * - 不许动态导入（import(...)，含 import.meta.glob），理由同上；
+ * - 不许读 .seed，['seed'] 的写法也算。
+ * 解构出种子（const { seed } = world）这类写法认不出，故意不调用 generate、照着生成过程重写一遍也认不出，都靠代码审查。
+ * 新手另有一条：只从引擎的对外入口导入（模块名是 '../engine'）。
  */
 
 import { describe, expect, it } from 'vitest';
 
 /** src/engine 下全部源码的文本，键是相对这个文件的路径，例如 '../src/engine/rules.ts'。 */
 const SOURCES = import.meta.glob<string>('../src/engine/*.ts', { query: '?raw', import: 'default', eager: true });
+
+/** src/policies 下（含子目录）全部源码的文本，键是相对这个文件的路径，例如 '../src/policies/novice.ts'。 */
+const POLICY_SOURCES = import.meta.glob<string>('../src/policies/**/*.ts', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+});
 
 /**
  * 引擎代码里不能出现的名字：随机数、系统时间、浏览器 API。按整个单词匹配，名字只是更长的标识符的一部分时
@@ -117,12 +135,56 @@ function notAllowedInObserve(modules: readonly string[]): string[] {
   return modules.filter((name) => !OBSERVE_IMPORTS.includes(name));
 }
 
+/**
+ * 静态的 import 和 export ... from（含 import type、export type）里，关键字和 from 之间的导入子句，
+ * 例如 ' { legalActionsForView, type View } '、' * as engine '、' type { Policy } '、' * '。子句可以跨行，
+ * 但不跨分号、引号、反引号和括号，所以不会从 export const 一路吞到后面某条导入的 from。
+ */
+const IMPORT_CLAUSE = /\b(?:import|export)\b(?<clause>[^;'"`()]*?)\bfrom\s*['"]/g;
+
+/** 去掉注释以后，源码里每条静态导入、转出的导入子句，按出现的顺序。 */
+function importClauses(source: string): string[] {
+  return [...stripComments(source).matchAll(IMPORT_CLAUSE)].map(({ groups }) => groups?.clause ?? '');
+}
+
+/** policyViolations 查的四种写法，也是它们在结果里的顺序。 */
+const IMPORTS_GENERATE = '导入 generate';
+const WHOLE_MODULE = '整体导入';
+const DYNAMIC_LOAD = '动态导入';
+const READS_SEED = '读 .seed';
+
+/** 动态导入：import(...)，以及 Vite 的 import.meta.glob。import 和括号、点之间夹着空白、换行或注释也算。 */
+const DYNAMIC_PATTERN = /\bimport\s*\(|\bimport\s*\.\s*meta\s*\.\s*glob\b/;
+
+/**
+ * 读 .seed：属性访问 .seed（含 ?.seed，点的两边有空白或换行也算），以及用字符串下标 ['seed']。
+ * 更长的名字（.seeds、.seedFromView）不算；展开运算符 ...seed 不是属性访问，也不算。
+ */
+const SEED_PATTERN = /(?<!\.)\.\s*seed\b|\[\s*(['"`])seed\1\s*\]/;
+
+/**
+ * 只看 View 的策略不许出现的写法（见文件开头），去掉注释以后查，按上面四种的顺序，每种最多列一次：
+ * 导入子句里有 generate 这个名字；对模块整体导入（导入子句里有星号，或者用了 require，含 import x = require(...)）；
+ * 动态导入；读 .seed。
+ */
+function policyViolations(source: string): string[] {
+  const code = stripComments(source);
+  const clauses = importClauses(source);
+  const found: string[] = [];
+  if (clauses.some((clause) => /\bgenerate\b/.test(clause))) found.push(IMPORTS_GENERATE);
+  if (clauses.some((clause) => clause.includes('*')) || /\brequire\b/.test(code)) found.push(WHOLE_MODULE);
+  if (DYNAMIC_PATTERN.test(code)) found.push(DYNAMIC_LOAD);
+  if (SEED_PATTERN.test(code)) found.push(READS_SEED);
+  return found;
+}
+
 function fileName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
 }
 
-function sourceOf(file: string): string {
-  const found = Object.entries(SOURCES).find(([path]) => fileName(path) === file);
+/** sources 里文件名是 file 的那份源码，默认在引擎的源码里找。 */
+function sourceOf(file: string, sources: Record<string, string> = SOURCES): string {
+  const found = Object.entries(sources).find(([path]) => fileName(path) === file);
   if (found === undefined) throw new Error(`没有读到 ${file}`);
   return found[1];
 }
@@ -158,6 +220,34 @@ describe('引擎源码：依赖方向', () => {
     // 先确认确实找到了导入（observe.ts 至少从 types.ts 导入类型），免得一个都没找到时空过。
     expect(modules).toContain('./types');
     expect(notAllowedInObserve(modules)).toEqual([]);
+  });
+});
+
+describe('策略源码：没有随机数和系统时间，不依赖界面，拿不到真实世界', () => {
+  it('读到了策略的源码，至少有 novice.ts；去掉注释以后代码还在：novice.ts 导出 novice，导入子句也找得到', () => {
+    // 一个文件都没读到，或者去注释误删了代码时，下面逐个文件的检查会空过，所以先确认。
+    expect(Object.keys(POLICY_SOURCES).map(fileName)).toContain('novice.ts');
+    for (const [path, source] of Object.entries(POLICY_SOURCES)) expect(source.length, path).toBeGreaterThan(0);
+    const novice = sourceOf('novice.ts', POLICY_SOURCES);
+    expect(stripComments(novice)).toMatch(/export const novice\b/);
+    const clauses = importClauses(novice);
+    expect(clauses).toHaveLength(1);
+    expect(clauses.join()).toContain('legalActionsForView');
+  });
+
+  it.each(Object.entries(POLICY_SOURCES))('%s：去掉注释以后不出现禁用的名字（含 import.meta），也不导入 react', (_path, source) => {
+    expect(forbiddenIn(source)).toEqual([]);
+  });
+
+  it.each(Object.entries(POLICY_SOURCES))(
+    '%s：不导入 generate 这个名字，不对模块整体导入，不动态导入，不读 .seed',
+    (_path, source) => {
+      expect(policyViolations(source)).toEqual([]);
+    },
+  );
+
+  it('novice.ts 只从引擎的对外入口 src/engine/index.ts 导入', () => {
+    expect(importedModules(sourceOf('novice.ts', POLICY_SOURCES))).toEqual(['../engine']);
   });
 });
 
@@ -267,6 +357,60 @@ describe('检测函数自检', () => {
       './rules',
       DYNAMIC_IMPORT,
       './rules',
+    ]);
+  });
+
+  it('策略的检查：导入子句里的 generate 按名字查，别名、跨行、带类型修饰、从别的模块导入、转出都算；注释里的、更长的名字不算', () => {
+    const samples: [string, string[]][] = [
+      ["import { generate } from '../engine';", [IMPORTS_GENERATE]],
+      ["import { generate as makeWorld } from '../engine';", [IMPORTS_GENERATE]],
+      ["import {\n  legalActionsForView,\n  generate,\n  type View,\n} from '../engine';", [IMPORTS_GENERATE]],
+      // 按名字查，不按模块路径查：直接从 generate.ts 导入也一样。
+      ["import { generate } from '../engine/generate';", [IMPORTS_GENERATE]],
+      ["import { type generate } from '../engine';", [IMPORTS_GENERATE]],
+      ["export { generate } from '../engine';", [IMPORTS_GENERATE]],
+      ["import { generateRoutes } from './routes';", []],
+      ["// import { generate } from '../engine';\n/* import { generate } from '../engine'; */", []],
+      ["import { legalActionsForView, walkMinutes, type Policy } from '../engine';", []],
+    ];
+    for (const [code, expected] of samples) expect(policyViolations(code), code).toEqual(expected);
+  });
+
+  it('策略的检查：整体导入、动态导入（含 import.meta.glob）和读 .seed 的各种写法都会被抓到；更长的名字、展开运算符、注释里的不算', () => {
+    const samples: [string, string[]][] = [
+      ["import * as engine from '../engine';", [WHOLE_MODULE]],
+      ["import type * as Engine from '../engine';", [WHOLE_MODULE]],
+      ["export * from '../engine';", [WHOLE_MODULE]],
+      ["export * as engine from '../engine';", [WHOLE_MODULE]],
+      ["import engine = require('../engine');", [WHOLE_MODULE]],
+      ["const engine = require('../engine');", [WHOLE_MODULE]],
+      ["const engine = await import('../engine');", [DYNAMIC_LOAD]],
+      ["const engine = await import /* 注释 */ (\n  '../engine'\n);", [DYNAMIC_LOAD]],
+      ["const modules = import.meta.glob('../engine/*.ts', { eager: true });", [DYNAMIC_LOAD]],
+      ['const seed = world.seed;', [READS_SEED]],
+      ['const seed = world?.seed;', [READS_SEED]],
+      ['const seed = world\n  .seed;', [READS_SEED]],
+      ["const seed = world['seed'];", [READS_SEED]],
+      ['const seed = world[ "seed" ];', [READS_SEED]],
+      ['const seeds = view.seedFromView + view.seeds;', []],
+      ['const copy = { ...seed };', []],
+      ["// const seed = world.seed;\n/* const engine = await import('../engine'); */", []],
+    ];
+    for (const [code, expected] of samples) expect(policyViolations(code), code).toEqual(expected);
+  });
+
+  it('策略的检查：几种写法同时出现时都列出来，顺序固定；导入子句不会从 export const 一路吞到后面的 from', () => {
+    const source = [
+      "import { legalActionsForView, generate } from '../engine';",
+      "import * as engine from '../engine';",
+      'export const peek = (world: World) => world.seed;',
+      "export const later = () => import('../engine');",
+    ].join('\n');
+    expect(policyViolations(source)).toEqual([IMPORTS_GENERATE, WHOLE_MODULE, DYNAMIC_LOAD, READS_SEED]);
+    // export const 后面遇到括号就停下：找到的子句只有两条导入的。
+    expect(importClauses(source).map((clause) => clause.trim())).toEqual([
+      '{ legalActionsForView, generate }',
+      '* as engine',
     ]);
   });
 
