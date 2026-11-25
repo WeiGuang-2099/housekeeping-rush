@@ -1,49 +1,22 @@
-// 占位页面：只用来确认脚手架和引擎的导入是通的。阶段 1 会整个换掉。
-// 正式界面的文字要放进语言包（src/content），不要像这里一样写死。
+/**
+ * 应用的根组件：一个 reducer 持有班次的 World 和 State（src/ui/shift.ts），主界面只拿到 screenProps 给出的
+ * View 和 params。
+ *
+ * 现在打开就是一班开工时的主界面，种子和难度档先固定写在下面；"网址里带种子"那一项改成从网址读，
+ * 每日班次（阶段 3）按日期定种子和难度档。动作按钮、动作预览和确认是下一项，到时用 reducer 的 dispatch 执行动作。
+ */
 
-import { PARAMS, allRooms, toClock, type Tier } from './engine';
+import { useMemo, useReducer } from 'react';
+import type { Tier } from './engine';
+import { ShiftScreen } from './ui/ShiftScreen';
+import { screenProps, shiftReducer, startShift } from './ui/shift';
 
-const TIER_LABEL: Record<Tier, string> = {
-  standard: '标准（周一到周三）',
-  tight: '紧（周四、周五）',
-  weekend: '周末',
-};
-
-const TIERS: Tier[] = ['standard', 'tight', 'weekend'];
+/** 临时固定的种子：批量模拟的第一个种子。 */
+const DEFAULT_SEED = 'sim-0';
+const DEFAULT_TIER: Tier = 'standard';
 
 export function App() {
-  return (
-    <main className="page">
-      <h1>
-        客房冲刺 <span className="en">Housekeeping Rush</span>
-      </h1>
-      <p>这是占位页面，游戏界面还在开发中。</p>
-
-      <table>
-        <thead>
-          <tr>
-            <th>难度档</th>
-            <th>房间数</th>
-            <th>布草车</th>
-            <th>贵宾时限</th>
-            <th>目标下班</th>
-          </tr>
-        </thead>
-        <tbody>
-          {TIERS.map((tier) => {
-            const params = PARAMS[tier];
-            return (
-              <tr key={tier}>
-                <td>{TIER_LABEL[tier]}</td>
-                <td>{allRooms(params).length} 间</td>
-                <td>{params.cart.capacity} 份</td>
-                <td>{params.vipDeadlines.map(toClock).join('、')}</td>
-                <td>{toClock(params.shift.targetFinish)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </main>
-  );
+  const [model] = useReducer(shiftReducer, null, () => startShift(DEFAULT_SEED, DEFAULT_TIER));
+  const props = useMemo(() => screenProps(model), [model]);
+  return <ShiftScreen view={props.view} params={props.params} />;
 }

@@ -1,9 +1,20 @@
+/*
+ * 美术方向（docs/DESIGN.md）：像一张印出来的任务单。暖白纸底，墨色线条，一个强调色；数字用等宽字体，时间对齐。
+ * 状态同时用颜色和图标表达。主界面只有一屏，手机竖屏时任务单折到平面图下方。
+ */
+
 :root {
   --paper: #faf7f2;
+  --sheet: #fffdf9;
   --ink: #2b2a28;
   --quiet: #7a756c;
+  --faint: #a8a296;
   --line: #d9d3c7;
+  --fill: #ece7de;
+  --linen: #cfc6b6;
   --accent: #2f6fd0;
+  --sans: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mono: ui-monospace, 'Cascadia Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
   color-scheme: light;
 }
 
@@ -15,43 +26,483 @@ body {
   margin: 0;
   background: var(--paper);
   color: var(--ink);
-  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  line-height: 1.6;
+  font-family: var(--sans);
+  line-height: 1.5;
 }
 
-.page {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 48px 16px;
-}
-
-h1 {
-  font-size: 28px;
-  margin: 0 0 8px;
-}
-
-.en {
-  font-size: 16px;
-  font-weight: 400;
-  color: var(--quiet);
-  margin-left: 8px;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 24px;
+.mono {
+  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
 }
 
-th,
-td {
-  text-align: left;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
+/* 图标：16 × 16 的线条图形，颜色跟随文字。 */
+.icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  vertical-align: -3px;
 }
 
-th {
+.glyph,
+.glyph path,
+.glyph rect,
+.glyph circle {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glyph-fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* 主界面 */
+
+.shift {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 16px 16px 40px;
+}
+
+.shift-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.shift-header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.shift-tier {
   color: var(--quiet);
-  font-weight: 500;
+  font-size: 14px;
+}
+
+.shift-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.shift-side {
+  display: grid;
+  gap: 16px;
+}
+
+@media (max-width: 820px) {
+  .shift-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 时间轴：轨道里的东西都按百分比绝对定位，字用 HTML，不随宽度缩小。 */
+
+.timeline {
+  margin-bottom: 16px;
+  padding: 4px 36px 0;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.tl-track {
+  position: relative;
+}
+
+.tl-track > * {
+  position: absolute;
+}
+
+.tl-axis {
+  left: 0;
+  right: 0;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--quiet);
+}
+
+.tl-band {
+  height: 14px;
+  background: var(--fill);
+}
+
+.tl-latest {
+  width: 2px;
+  height: 24px;
+  margin-left: -1px;
+  background: var(--quiet);
+}
+
+.tl-hour {
+  width: 1px;
+  height: 6px;
+  background: var(--faint);
+}
+
+.tl-tick {
+  width: 1px;
+  height: 12px;
+  background: var(--quiet);
+}
+
+.tl-tick-label,
+.tl-note,
+.tl-flag {
+  transform: translateX(-50%);
+  white-space: nowrap;
+  line-height: 16px;
+}
+
+.tl-tick-label {
+  color: var(--quiet);
+  font-size: 11px;
+}
+
+.tl-note {
+  color: var(--quiet);
+  font-size: 11px;
+}
+
+.tl-break {
+  height: 8px;
+  background: var(--quiet);
+  border-radius: 2px;
+}
+
+.tl-pole {
+  width: 1px;
+  background: var(--faint);
+}
+
+.tl-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 3px;
+  background: var(--sheet);
+}
+
+.tl-flag.is-done {
+  color: var(--faint);
+}
+
+.tl-flag.is-overdue:not(.is-done) .tl-flag-word {
+  text-decoration: line-through;
+}
+
+.tl-dot {
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  background: var(--sheet);
+}
+
+.tl-now {
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+}
+
+.tl-now-dot {
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.tl-now-label {
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 18px;
+}
+
+.tl-now-label.is-center {
+  transform: translateX(-50%);
+}
+
+.tl-now-label.is-end {
+  transform: translateX(-100%);
+}
+
+@media (max-width: 600px) {
+  .timeline {
+    padding: 4px 24px 0;
+  }
+
+  /* 窄屏上旗字只留房号（timelineModel.ts 的 LABEL_SPAN 按这个宽度定），刻度字也小一号，16:00 和 17:00 才不挤在一起。 */
+  .tl-flag-word {
+    display: none;
+  }
+
+  .tl-tick-label {
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 360px) {
+  .timeline {
+    padding: 4px 18px 0;
+  }
+
+  .tl-tick-label {
+    font-size: 9px;
+  }
+}
+
+/* 平面图：SVG 按宽度缩放；太窄时不再缩小，改成横向滚动，房号保持看得清。 */
+
+.floor-plan {
+  margin: 0;
+}
+
+.fp-scroll {
+  overflow-x: auto;
+}
+
+.fp-svg {
+  display: block;
+  width: 100%;
+  min-width: 480px;
+  height: auto;
+}
+
+.fp-floor {
+  fill: var(--quiet);
+  font-size: 16px;
+}
+
+.fp-corridor {
+  stroke: var(--line);
+  stroke-width: 2;
+  stroke-dasharray: 2 6;
+  stroke-linecap: round;
+}
+
+.fp-lift,
+.fp-service {
+  fill: var(--sheet);
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+
+.fp-lift-label,
+.fp-service-label {
+  fill: var(--quiet);
+  font-size: 15px;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.fp-room rect {
+  fill: var(--sheet);
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+
+.fp-room-id {
+  fill: var(--ink);
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.fp-room-tag {
+  fill: var(--quiet);
+  font-size: 14px;
+}
+
+.fp-room-kind {
+  fill: var(--ink);
+}
+
+.fp-room-icon {
+  color: var(--quiet);
+}
+
+.fp-room.is-done rect {
+  fill: var(--fill);
+  stroke: var(--faint);
+}
+
+.fp-room.is-done .fp-room-id,
+.fp-room.is-done .fp-room-kind,
+.fp-room.is-locked .fp-room-id,
+.fp-room.is-locked .fp-room-kind {
+  fill: var(--faint);
+}
+
+.fp-room.is-locked rect,
+.fp-room.is-later rect {
+  stroke: var(--faint);
+  stroke-dasharray: 5 4;
+}
+
+.fp-you circle {
+  fill: var(--ink);
+}
+
+.fp-you text {
+  fill: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+  dominant-baseline: central;
+  /* 字底下垫一圈纸色，走廊的虚线从字后面穿过时不糊。 */
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.fp-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin-top: 8px;
+  color: var(--quiet);
+  font-size: 13px;
+}
+
+.fp-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fp-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 20px;
+  border: 1.5px solid var(--ink);
+  border-radius: 4px;
+  background: var(--sheet);
+}
+
+.fp-legend-item.is-done .fp-swatch {
+  border-color: var(--faint);
+  background: var(--fill);
+}
+
+.fp-legend-item.is-locked .fp-swatch,
+.fp-legend-item.is-later .fp-swatch {
+  border-color: var(--faint);
+  border-style: dashed;
+}
+
+/* 任务单 */
+
+.task-sheet {
+  padding: 14px 16px 10px;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.task-sheet h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.ts-call {
+  margin: 2px 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--quiet);
+  font-size: 13px;
+}
+
+.ts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.ts-table th,
+.ts-table td {
+  padding: 4px 6px 4px 0;
+  vertical-align: top;
+  text-align: left;
+}
+
+.ts-room {
+  font-weight: 600;
+}
+
+.ts-kind,
+.ts-clue {
+  white-space: nowrap;
+}
+
+.ts-icon {
+  width: 22px;
+  color: var(--quiet);
+}
+
+.ts-facts {
+  color: var(--quiet);
+}
+
+.ts-fact {
+  display: inline-block;
+  margin-right: 10px;
+}
+
+.ts-fact.is-vip,
+.ts-fact.is-rush {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.ts-row.in-hung,
+.ts-row.in-done,
+.ts-row.in-hung .ts-fact,
+.ts-row.in-done .ts-fact {
+  color: var(--faint);
+}
+
+/* 布草车 */
+
+.cart {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.cart-title {
+  color: var(--quiet);
+}
+
+.cart-cells {
+  display: flex;
+  gap: 6px;
+}
+
+.cart-cell {
+  width: 24px;
+  height: 24px;
+  border: 1.5px solid var(--line);
+  border-radius: 4px;
+  background: var(--sheet);
+}
+
+.cart-cell.is-full {
+  border-color: var(--quiet);
+  background: var(--linen);
+}
+
+.cart-count {
+  color: var(--quiet);
 }

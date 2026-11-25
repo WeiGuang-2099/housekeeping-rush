@@ -6,7 +6,8 @@ export default defineConfig({
   base: './',
   plugins: [react()],
   test: {
-    include: ['tests/**/*.test.ts'],
+    // 界面的测试用 .tsx 写，在 Node 里用 react-dom/server 渲染成字符串，不需要浏览器环境。
+    include: ['tests/**/*.test.{ts,tsx}'],
     environment: 'node',
   },
 });
