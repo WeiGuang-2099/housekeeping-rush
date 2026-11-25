@@ -305,6 +305,31 @@ export interface View {
 }
 
 // ---------------------------------------------------------------------------
+// Recall：从日志推出的关键事实
+// ---------------------------------------------------------------------------
+
+/**
+ * 从 View 的日志能推出、界面要替玩家记着的关键事实（docs/DESIGN.md 的"记性"），由 recall（recall.ts）推出。
+ * 幽灵从日志里记得一切，玩家要靠自己记，界面显示这些，"信息和玩家相同"才成立。时刻是开工后第几分钟。
+ */
+export interface Recall {
+  /** 最近一次打给主管的挂断时刻：主管报的房态（退房房的已退标记、请勿打扰房的摘牌）截至这一刻。本班还没打过为 null。 */
+  readonly lastCallAt: Minute | null;
+  /** 还不知道摘牌的请勿打扰房，按 view.rooms 的顺序，每间一项。已经得知摘牌的不列。 */
+  readonly stillHung: readonly HungDnd[];
+}
+
+/** 一间还不知道摘牌的请勿打扰房。 */
+export interface HungDnd {
+  readonly room: RoomId;
+  /**
+   * 最近一次确认它仍挂着牌的时刻：打给主管的挂断时刻，或者路过、停留在它的门位的那一分钟，取最晚的一次。
+   * 本班还没确认过为 null；开工时任务单上标着请勿打扰，不算一次确认。
+   */
+  readonly confirmedAt: Minute | null;
+}
+
+// ---------------------------------------------------------------------------
 // Score
 // ---------------------------------------------------------------------------
 
@@ -352,6 +377,8 @@ export interface Engine {
    * 对任意状态，illegalReasonForView(observe(world, state), world.params, action) 为 null 当且仅当 apply 接受这个动作。
    */
   illegalReasonForView(view: View, params: Params, action: Action): IllegalReason | null;
+  /** 从 View 的日志推出界面要替玩家记着的关键事实：最近一次打电话的时刻，还不知道摘牌的请勿打扰房最近一次确认仍挂牌的时刻。 */
+  recall(view: View, params: Params): Recall;
   /** 结束的班次的成绩。纯函数；state 和 world 的房间对不上、班次还没结束、判负，或者最后一条日志不是收工还车时抛错。 */
   score(world: World, state: State): Score;
 }

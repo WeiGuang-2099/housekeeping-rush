@@ -7,7 +7,8 @@
  * 按 View 判定合法动作的 legalActionsForView 在 rules.ts 里）。这一条用白名单：'./rules.js'、'./index' 这些写法
  * 也能拿到 rules.ts，按模块名列禁止的写法列不全。动态导入的参数看不出是哪个模块时（变量、拼接的表达式、
  * 带插值的模板字符串），记一个不在白名单里的占位名，同样判失败。require(...) 也按导入算，包括只引入类型的
- * import type X = require(...)。
+ * import type X = require(...)。recall.ts 同样用白名单，只导入 types.ts、params.ts（参数的类型）和 layout.ts：
+ * 它只从 View 和 params 推出关键事实，用得着的只有几何，用不着规则和生成器。
  *
  * 为什么要读源码：tsconfig 的 lib 含 DOM，类型检查拦不住引擎代码用 window、document；
  * 性质测试只把 Math.random 和 Date.now 换成会抛错的桩，拦不住 performance.now、new Date、crypto。
@@ -136,6 +137,14 @@ function notAllowedInObserve(modules: readonly string[]): string[] {
   return modules.filter((name) => !OBSERVE_IMPORTS.includes(name));
 }
 
+/** recall.ts 只能导入这三个模块：类型、参数的类型和几何（理由见文件开头）。模块名同样要逐字相同。 */
+const RECALL_IMPORTS: readonly string[] = ['./types', './params', './layout'];
+
+/** 不在 recall.ts 白名单里的模块名，按出现的顺序。 */
+function notAllowedInRecall(modules: readonly string[]): string[] {
+  return modules.filter((name) => !RECALL_IMPORTS.includes(name));
+}
+
 /**
  * 静态的 import 和 export ... from（含 import type、export type）里，关键字和 from 之间的导入子句，
  * 例如 ' { legalActionsForView, type View } '、' * as engine '、' type { Policy } '、' * '。子句可以跨行，
@@ -191,10 +200,10 @@ function sourceOf(file: string, sources: Record<string, string> = SOURCES): stri
 }
 
 describe('引擎源码：没有随机数和系统时间，不依赖界面', () => {
-  it('读到了引擎的源码，至少有 rules.ts、generate.ts、rng.ts、types.ts、observe.ts、score.ts', () => {
+  it('读到了引擎的源码，至少有 rules.ts、generate.ts、rng.ts、types.ts、observe.ts、score.ts、recall.ts', () => {
     // 一个文件都没读到时，下面逐个文件的检查会空过，所以先确认读到了。
     expect(Object.keys(SOURCES).map(fileName)).toEqual(
-      expect.arrayContaining(['rules.ts', 'generate.ts', 'rng.ts', 'types.ts', 'observe.ts', 'score.ts']),
+      expect.arrayContaining(['rules.ts', 'generate.ts', 'rng.ts', 'types.ts', 'observe.ts', 'score.ts', 'recall.ts']),
     );
     for (const [path, source] of Object.entries(SOURCES)) expect(source.length, path).toBeGreaterThan(0);
   });
@@ -221,6 +230,13 @@ describe('引擎源码：依赖方向', () => {
     // 先确认确实找到了导入（observe.ts 至少从 types.ts 导入类型），免得一个都没找到时空过。
     expect(modules).toContain('./types');
     expect(notAllowedInObserve(modules)).toEqual([]);
+  });
+
+  it('recall.ts 只导入 types、params 和 layout，不导入 rules.ts 和 generate.ts', () => {
+    const modules = importedModules(sourceOf('recall.ts'));
+    // 先确认确实找到了导入（recall.ts 要从 layout.ts 导入 walkPath），免得一个都没找到时空过。
+    expect(modules).toContain('./layout');
+    expect(notAllowedInRecall(modules)).toEqual([]);
   });
 });
 
@@ -368,6 +384,12 @@ describe('检测函数自检', () => {
       DYNAMIC_IMPORT,
       './rules',
     ]);
+  });
+
+  it('recall.ts 的白名单：types、params、layout 在；rules、generate、经由 index.ts 的写法和看不出模块名的动态导入都不在', () => {
+    expect(notAllowedInRecall(['./types', './params', './layout'])).toEqual([]);
+    const reach = ['./rules', './generate', './rules.js', './index', '.', '../engine', DYNAMIC_IMPORT];
+    expect(notAllowedInRecall(reach)).toEqual(reach);
   });
 
   it('策略的检查：导入子句里的 generate 按名字查，别名、跨行、带类型修饰、从别的模块导入、转出都算；注释里的、更长的名字不算', () => {
