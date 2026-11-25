@@ -134,7 +134,7 @@ describe('读到了源码', () => {
   it('界面、语言包和入口的文件都读到了，内容不是空的', () => {
     // 一个文件都没读到时，下面逐个文件的检查会空过，所以先确认读到了。
     expect(Object.keys(UI_SOURCES).map(fileName)).toEqual(
-      expect.arrayContaining(['ShiftScreen.tsx', 'FloorPlan.tsx', 'Timeline.tsx', 'TaskSheet.tsx', 'Cart.tsx', 'shift.ts']),
+      expect.arrayContaining(['ShiftScreen.tsx', 'FloorPlan.tsx', 'Timeline.tsx', 'TaskSheet.tsx', 'Cart.tsx', 'ActionBar.tsx', 'preview.ts', 'shift.ts']),
     );
     expect(Object.keys(CONTENT_SOURCES)).toEqual(
       expect.arrayContaining(['../src/content/index.ts', '../src/content/types.ts', '../src/content/zh/ui.ts']),
@@ -168,9 +168,9 @@ describe('引擎一律从对外入口导入', () => {
 describe('班次进行中界面只读 View', () => {
   const viewOnly = Object.entries(UI_SOURCES).filter(([path]) => !HOLDS_WORLD.includes(fileName(path)));
 
-  it('除了 reducer 以外的文件都在查：至少有四个部件和主界面', () => {
+  it('除了 reducer 以外的文件都在查：至少有四个部件、主界面、动作栏和预览', () => {
     expect(viewOnly.map(([path]) => fileName(path))).toEqual(
-      expect.arrayContaining(['ShiftScreen.tsx', 'FloorPlan.tsx', 'Timeline.tsx', 'TaskSheet.tsx', 'Cart.tsx']),
+      expect.arrayContaining(['ShiftScreen.tsx', 'FloorPlan.tsx', 'Timeline.tsx', 'TaskSheet.tsx', 'Cart.tsx', 'ActionBar.tsx', 'preview.ts']),
     );
   });
 

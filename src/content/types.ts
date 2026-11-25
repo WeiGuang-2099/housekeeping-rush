@@ -10,7 +10,7 @@
  * 4. 只从引擎的对外入口导入类型，不导入 React，也不导入界面（tests/ui-boundary.test.ts 检查）。
  */
 
-import type { Clue, MessLevel, RoomId, RoomKind, Tier } from '../engine';
+import type { Clue, IllegalReasonCode, MessLevel, RoomId, RoomKind, Tier } from '../engine';
 
 /** 一种语言的全部界面文字。 */
 export interface UiText {
@@ -32,7 +32,112 @@ export interface UiText {
   readonly floorPlan: FloorPlanText;
   readonly taskSheet: TaskSheetText;
   readonly cart: CartText;
+  readonly actions: ActionsText;
+  readonly preview: PreviewText;
+  readonly illegal: IllegalText;
 }
+
+/** 五个动作按钮（打扫是点房间）。 */
+export interface ActionsText {
+  /** 按钮那一组的无障碍名称。 */
+  readonly label: string;
+  readonly restock: string;
+  readonly call: string;
+  readonly break: string;
+  readonly wait: string;
+  readonly finish: string;
+}
+
+/**
+ * 动作预览（docs/DESIGN.md 的"动作预览"）：点房间或按钮以后、确认之前显示的代价。钟点由界面换好再传进来；
+ * 一样的两个钟点或分钟数（没有范围）由这里决定怎么写。
+ */
+export interface PreviewText {
+  /** 预览那一块的无障碍名称。 */
+  readonly label: string;
+  /** 还没选动作时的提示。 */
+  readonly hint: string;
+  /** 班次已经结束（还完车）。clock 是还完车的时刻。 */
+  readonly ended: (clock: string) => string;
+  /** 各个动作的标题。 */
+  readonly service: (room: RoomId) => string;
+  readonly restock: string;
+  readonly call: string;
+  readonly break: string;
+  readonly wait: string;
+  readonly finish: string;
+  /** 走过去：步行几分钟、几点到。minutes 为 0 时是已经在那里。 */
+  readonly walk: (minutes: number, clock: string) => string;
+  /** 打扫要多久：最少到最多；开过门的只有一个数。 */
+  readonly cleaning: (from: number, to: number) => string;
+  /** 接着做被 17:00 截断的房间：已经做了的分钟数。 */
+  readonly resume: (done: number) => string;
+  /** 几点做完：最早到最晚。 */
+  readonly finishAt: (from: string, to: string) => string;
+  /** 17:00 前可能做不完、一定做不完。clock 是 17:00。 */
+  readonly cutMaybe: (clock: string) => string;
+  readonly cutSure: (clock: string) => string;
+  /** 没敲过门，客人可能在：在的话敲门以后几点就回来。 */
+  readonly mayBeRefused: (clock: string) => string;
+  /** 布草：这一步用几份、用完车里剩几份；接着做的房间不再用布草。 */
+  readonly linen: (used: number, left: number) => string;
+  readonly noLinen: string;
+  /** 这间房的时限赶不赶得上。kind 是 vip 或 rush 的字。 */
+  readonly vip: string;
+  readonly rush: string;
+  readonly onTime: (kind: string, clock: string) => string;
+  readonly maybeLate: (kind: string, clock: string) => string;
+  readonly late: (kind: string, clock: string) => string;
+  /** 补货：几点补完，车里补满到几份。 */
+  readonly restockPlan: (clock: string, capacity: number) => string;
+  /** 打电话：几点挂断，主管报的是挂断那一刻的房态。 */
+  readonly callPlan: (clock: string) => string;
+  /** 休息：几点开始（到达服务间的时刻），几点休息完。 */
+  readonly breakPlan: (start: string, end: string) => string;
+  /** 等待：等几分钟，到几点；选分钟数的那一排按钮的说明。 */
+  readonly waitPlan: (minutes: number, clock: string) => string;
+  readonly waitPick: string;
+  /** 收工还车：几点还完车；17:00 以后是强制下班，clock 是 17:00。 */
+  readonly finishPlan: (clock: string) => string;
+  readonly forced: (clock: string) => string;
+  /** 不合法时原因前面的字。 */
+  readonly cannot: string;
+  readonly confirm: string;
+  readonly cancel: string;
+}
+
+/**
+ * 非法动作的原因（引擎的 IllegalReason），每个编号一句。参数是原因里的数据，时刻已经换成钟点。
+ * 编号和引擎的 IllegalReasonCode 一一对应，多一个或少一个编号都过不了下面的类型检查。
+ */
+export interface IllegalText {
+  readonly ended: string;
+  readonly mustRespond: string;
+  readonly noSuchOption: (option: string) => string;
+  readonly afterHardStop: (hardStop: string) => string;
+  readonly mustBreak: (breakLatest: string) => string;
+  readonly restockTooLate: (hardStop: string) => string;
+  readonly callTooLate: (hardStop: string) => string;
+  readonly breakAlreadyTaken: string;
+  readonly breakTooEarly: (breakEarliest: string, arrival: string) => string;
+  readonly badWait: (limit: number) => string;
+  readonly noPrompt: string;
+  readonly unknownAction: string;
+  readonly noSuchRoom: (room: RoomId) => string;
+  readonly roomDone: (room: RoomId) => string;
+  readonly notFlagged: (room: RoomId) => string;
+  readonly dndNotLifted: (room: RoomId) => string;
+  readonly cannotReachInTime: (room: RoomId, hardStop: string) => string;
+  readonly comeBackLater: (room: RoomId, comeBackAt: string, arrival: string) => string;
+  readonly linenShort: (room: RoomId, needed: number, cart: number) => string;
+  readonly breakNotTaken: string;
+  readonly roomsLeft: (rooms: readonly RoomId[]) => string;
+}
+
+/** IllegalText 的键和引擎的编号正好相同：任何一边多出来的编号都会让这一行过不了类型检查。 */
+type Exactly<A, B> = [Exclude<A, B> | Exclude<B, A>] extends [never] ? true : false;
+type MustBeTrue<T extends true> = T;
+export type IllegalTextCoversEveryCode = MustBeTrue<Exactly<keyof IllegalText, IllegalReasonCode>>;
 
 /** 时间轴（docs/DESIGN.md 的"主界面的四个部件"）。 */
 export interface TimelineText {
@@ -55,6 +160,8 @@ export interface TimelineText {
   readonly rushTitle: (room: RoomId, clock: string, overdue: boolean) => string;
   /** 客人告知的回来时间那个小点的提示文字。 */
   readonly comeBackTitle: (room: RoomId, clock: string) => string;
+  /** 预览动作时，指针前方虚影的终点：最晚做完的时刻。 */
+  readonly previewTo: (clock: string) => string;
 }
 
 /** 平面图。 */
@@ -72,6 +179,10 @@ export interface FloorPlanText {
   readonly rushTag: (clock: string) => string;
   /** 图例：三种和"看起来能进"不同的状态。 */
   readonly legend: { readonly done: string; readonly locked: string; readonly later: string };
+  /** 图例：预览中的目标。 */
+  readonly target: string;
+  /** 能点的房间方块的无障碍名称：点了预览去这间房打扫。 */
+  readonly pick: (room: RoomId) => string;
 }
 
 /** 任务单。 */
@@ -98,6 +209,8 @@ export interface TaskSheetText {
   readonly done: (clock: string) => string;
   /** 一间房的完整说明，平面图上鼠标停在房间方块上时显示。facts 是排好的已知信息。 */
   readonly summary: (room: RoomId, kind: string, clue: string, facts: readonly string[]) => string;
+  /** 能点的房号按钮的无障碍名称：点了预览去这间房打扫。 */
+  readonly pick: (room: RoomId) => string;
 }
 
 /** 布草车。 */
@@ -106,4 +219,7 @@ export interface CartText {
   readonly count: (left: number, capacity: number) => string;
   /** 无障碍名称：格子本身不读出来，用这一句代替。 */
   readonly label: (left: number, capacity: number) => string;
+  /** 预览时高亮的格子的提示文字：这一步要用掉几份，或者补货补回几份。 */
+  readonly use: (count: number) => string;
+  readonly refill: (count: number) => string;
 }

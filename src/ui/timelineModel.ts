@@ -2,7 +2,8 @@
  * 时间轴上画什么：刻度、休息、时限的小旗、回来时间的小点和指针（docs/DESIGN.md 的"主界面的四个部件"）。
  *
  * 1. 只读 View 和 params，纯函数。时刻都是开工后第几分钟；组件显示时用 clock.ts 换成钟点，用 percentOf 换成位置。
- * 2. 轴从开工（0）画到 17:00（hardStop）。17:00 以后才还完车时，现在的时刻晚于 17:00，轴的右端就延到现在，指针不出界。
+ * 2. 轴从开工（0）画到 17:00（hardStop）。17:00 以后才还完车时，现在的时刻晚于 17:00，轴的右端就延到现在，指针不出界；
+ *    正在预览的动作 17:00 以后才做完（收工还车）时，也延到它，虚影不出界。
  * 3. 带字的刻度：开工、10:30（breakEarliest）、14:30（breakLatest）、16:00（targetFinish）、17:00（hardStop），
  *    都从 params 读；另有每个整点一个不带字的小刻度（整点按 clock.ts 的开工时刻推）。
  * 4. 休息。还没休息时，浅色带从 10:30 画到轴的右端，表示从这时起可以开始休息（按到达服务间的时刻算，没有上界）；
@@ -72,10 +73,13 @@ export interface TimelineModel {
   readonly comeBacks: readonly { readonly room: RoomId; readonly at: Minute }[];
 }
 
-/** 时间轴的内容，规则见文件开头。 */
-export function timelineModel(view: View, params: Params): TimelineModel {
+/**
+ * 时间轴的内容，规则见文件开头。until 是正在预览的动作最晚做完的时刻（指针前方的虚影画到这里），
+ * 它晚于 17:00 时（17:00 以后才还完车），轴的右端也延到它。
+ */
+export function timelineModel(view: View, params: Params, until: Minute | null = null): TimelineModel {
   const { shift } = params;
-  const end = Math.max(shift.hardStop, view.minute);
+  const end = Math.max(shift.hardStop, view.minute, until ?? view.minute);
   const breakEntry = view.log.find((entry) => entry.outcome.type === 'breakTaken');
   const { flags, lanes } = placeFlags(view);
   return {

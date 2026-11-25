@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { useText } from '../src/content';
 import { zhUi } from '../src/content/zh/ui';
-import { initial, observe, PARAMS, recall, toClock, type Params, type State, type View, type World } from '../src/engine';
+import { initial, observe, PARAMS, recall, toClock, type Action, type Params, type State, type View, type World } from '../src/engine';
 import { Cart } from '../src/ui/Cart';
 import { FloorPlan } from '../src/ui/FloorPlan';
 import { floorGeometry, placePoint } from '../src/ui/floorGeometry';
@@ -28,6 +28,23 @@ type Widget = (props: { view: View; params: Params }) => ReactElement;
 /** 用 world 这一刻的 View 渲染一个部件。View 先深度冻结：部件不能修改它。 */
 function render(Component: Widget, world: World, state: State): string {
   return renderToStaticMarkup(<Component view={deepFreeze(observe(world, state))} params={world.params} />);
+}
+
+/** 不做任何事的回调：服务端渲染不会调用它们。 */
+const ignore = (): void => undefined;
+
+/** 用 world 这一刻的 View 渲染主界面，selected 是正在预览的动作。 */
+function renderScreen(world: World, state: State, selected: Action | null = null): string {
+  return renderToStaticMarkup(
+    <ShiftScreen
+      view={deepFreeze(observe(world, state))}
+      params={world.params}
+      selected={selected}
+      onSelect={ignore}
+      onCancel={ignore}
+      onConfirm={ignore}
+    />,
+  );
 }
 
 /** 带 data-room 的元素按出现顺序的房号。 */
@@ -242,13 +259,173 @@ describe('平面图', () => {
 });
 
 describe('主界面', () => {
-  it.each(TIERS)('%s：游戏名、难度档和四个部件都在', (tier) => {
+  it.each(TIERS)('%s：游戏名、难度档、四个部件和动作栏都在', (tier) => {
     const world = controlledWorld({}, { tier });
-    const html = render(ShiftScreen, world, initial(world));
+    const html = renderScreen(world, initial(world));
     expect(html).toContain(zhUi.title);
     expect(html).toContain(zhUi.tier[tier]);
-    for (const part of ['class="timeline"', 'class="floor-plan"', 'class="task-sheet"', 'class="cart"']) {
+    for (const part of ['class="timeline"', 'class="floor-plan"', 'class="task-sheet"', 'class="cart"', 'class="action-bar"']) {
       expect(html).toContain(part);
     }
+  });
+});
+
+/** 动作栏五个按钮各自能不能点（没有 disabled 就是能点）。 */
+function buttonsIn(html: string): Record<string, boolean> {
+  return Object.fromEntries(
+    [...html.matchAll(/<button[^>]*data-action="(\w+)"[^>]*>/g)].map((match) => [match[1], !match[0].includes('disabled=""')]),
+  );
+}
+
+/** 预览那一块去掉标签以后的字。 */
+function previewTextOf(html: string): string {
+  const match = /<div class="ab-preview"[\s\S]*?<div class="ab-buttons">/.exec(html);
+  if (match === null) throw new Error('没有预览那一块');
+  return match[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+}
+
+describe('动作预览', () => {
+  const world = controlledWorld({
+    1201: departure(),
+    1202: departure({ vipDeadline: 270 }),
+    1204: stayover(),
+    1305: stayover(),
+  });
+
+  it('没选动作：写提示；五个按钮都能点（不合法的点了看原因）；没做完的房间都能点，房号是按钮', () => {
+    const html = renderScreen(world, initial(world));
+    expect(previewTextOf(html)).toContain(zhUi.preview.hint);
+    expect(buttonsIn(html)).toEqual({ restock: true, call: true, break: true, wait: true, finish: true });
+    for (const type of ['restock', 'call', 'break', 'wait', 'finish'] as const) expect(html).toContain(`>${zhUi.actions[type]}<`);
+    expect(count(html, /class="fp-room [^"]*is-pickable"/g)).toBe(observe(world, initial(world)).rooms.length);
+    expect(count(html, /class="ts-pick"/g)).toBe(observe(world, initial(world)).rooms.length);
+    expect(html).not.toContain('class="tl-ghost"');
+    expect(html).not.toContain('class="fp-path"');
+  });
+
+  it('预览去没敲过门的续住房：标题和几句代价、确认能按；时间轴画虚影到最晚做完；平面图描出目标和路线；任务单描出那一行；布草车高亮 1 格', () => {
+    const html = renderScreen(world, initial(world), act.service(1204));
+    const text = previewTextOf(html);
+    for (const line of [
+      zhUi.preview.service(1204),
+      zhUi.preview.walk(2, '08:32'),
+      zhUi.preview.cleaning(12, 24),
+      zhUi.preview.finishAt('08:44', '08:56'),
+      zhUi.preview.mayBeRefused('08:33'),
+      zhUi.preview.linen(1, world.params.cart.capacity - 1),
+    ]) {
+      expect(text).toContain(line);
+    }
+    expect(html).toMatch(/<button type="button" class="ab-confirm">/);
+    expect(html).toContain('class="tl-ghost"');
+    expect(html).toContain(zhUi.timeline.previewTo('08:56'));
+    expect(html).toMatch(/class="fp-room is-open is-selected is-pickable" data-room="1204"/);
+    expect(html).toMatch(/<tr class="ts-row is-open in-todo is-selected" data-room="1204"/);
+    expect(count(html, /class="cart-cell is-full is-use"/g)).toBe(1);
+    // 路线：从服务间（12 楼门位 0）沿走廊走到门位 2。
+    const geometry = floorGeometry(world.params);
+    const points = [0, 1, 2].map((door) => placePoint(geometry, { floor: 12, door })).map((p) => `${p.x},${p.y}`);
+    expect(html).toContain(`<polyline class="fp-path" points="${points.join(' ')}"`);
+  });
+
+  it('跨层的路线经过两层的门位 0（电梯）', () => {
+    const html = renderScreen(world, initial(world), act.service(1305));
+    const geometry = floorGeometry(world.params);
+    const points = [
+      { floor: 12, door: 0 },
+      { floor: 13, door: 0 },
+      { floor: 13, door: 1 },
+      { floor: 13, door: 2 },
+      { floor: 13, door: 3 },
+    ].map((place) => placePoint(geometry, place));
+    expect(html).toContain(`points="${points.map((p) => `${p.x},${p.y}`).join(' ')}"`);
+  });
+
+  it('路线从你现在的位置出发；不在服务间时预览不合法的动作也没有路线', () => {
+    // 做完 1204 停在 12 楼门位 2。
+    const state = play(world, initial(world), act.service(1204));
+    const geometry = floorGeometry(world.params);
+    const html = renderScreen(world, state, act.service(1305));
+    const points = [
+      { floor: 12, door: 2 },
+      { floor: 12, door: 1 },
+      { floor: 12, door: 0 },
+      { floor: 13, door: 0 },
+      { floor: 13, door: 1 },
+      { floor: 13, door: 2 },
+      { floor: 13, door: 3 },
+    ].map((place) => placePoint(geometry, place));
+    expect(html).toContain(`points="${points.map((p) => `${p.x},${p.y}`).join(' ')}"`);
+    expect(renderScreen(world, state, act.service(1201))).not.toContain('class="fp-path"');
+  });
+
+  it('布草车描出的是最后几个实心格：这一步从车里拿走的那几份', () => {
+    // 做完 1204 用掉 1 份，剩 7 份；预览退房房要 2 份，描出第 6、7 格（下标 5、6）。
+    const state = play(world, initial(world), act.call(), act.service(1204));
+    const html = renderScreen(world, state, act.service(1201));
+    const cells = [...html.matchAll(/class="(cart-cell(?: [^"]*)?)"/g)].map((match) => match[1]);
+    expect(cells).toEqual([
+      ...Array.from({ length: 5 }, () => 'cart-cell is-full'),
+      'cart-cell is-full is-use',
+      'cart-cell is-full is-use',
+      'cart-cell',
+    ]);
+  });
+
+  it('预览不合法的动作：写做不了和原因，确认不能按；没有虚影和路线，目标照样描出来', () => {
+    const html = renderScreen(world, initial(world), act.service(1201));
+    expect(previewTextOf(html)).toContain(zhUi.preview.cannot + zhUi.illegal.notFlagged(1201));
+    expect(html).toMatch(/<button type="button" class="ab-confirm" disabled="">/);
+    expect(html).not.toContain('class="tl-ghost"');
+    expect(html).not.toContain('class="fp-path"');
+    expect(html).toMatch(/data-room="1201"[^>]*aria-pressed="true"/);
+  });
+
+  it('贵宾房：写赶不赶得上时限；布草车高亮 2 格', () => {
+    const called = play(world, initial(world), act.call());
+    const html = renderScreen(world, called, act.service(1202));
+    expect(previewTextOf(html)).toContain(zhUi.preview.onTime(zhUi.preview.vip, '13:00'));
+    expect(count(html, /class="cart-cell is-full is-use"/g)).toBe(world.params.rooms.departure.linen);
+  });
+
+  it('等待：选分钟数的一排按钮从 1 到上限，选中的那个按下；虚影到等完的时刻', () => {
+    const html = renderScreen(world, initial(world), act.wait(3));
+    expect(previewTextOf(html)).toContain(zhUi.preview.waitPlan(3, '08:33'));
+    const options = [...html.matchAll(/<button type="button" class="ab-wait-option mono" aria-pressed="(\w+)">(\d+)</g)];
+    expect(options.map((match) => Number(match[2]))).toEqual([1, 2, 3, 4, 5]);
+    expect(options.filter((match) => match[1] === 'true').map((match) => Number(match[2]))).toEqual([3]);
+    expect(html).toContain(zhUi.timeline.previewTo('08:33'));
+    expect(buttonsIn(html)).toMatchObject({ wait: true });
+    expect(html).toMatch(/data-action="wait"[^>]*aria-pressed="true"/);
+  });
+
+  it('补货：布草车高亮会补回来的空格', () => {
+    const state = play(world, initial(world), act.call(), act.service(1201));
+    const html = renderScreen(world, state, act.restock());
+    expect(count(html, /class="cart-cell is-refill"/g)).toBe(world.params.cart.capacity - state.cart);
+    expect(previewTextOf(html)).toContain(zhUi.preview.restockPlan(toClock(state.minute + 1 + 5), world.params.cart.capacity));
+  });
+
+  it('14:30 起还没休息：只有休息能点，房间和房号都不能点，提示写原因', () => {
+    const state = waitUntil(world, initial(world), world.params.shift.breakLatest);
+    const html = renderScreen(world, state);
+    expect(buttonsIn(html)).toEqual({ restock: false, call: false, break: true, wait: false, finish: false });
+    expect(html).not.toContain('is-pickable');
+    expect(html).not.toContain('class="ts-pick"');
+    expect(previewTextOf(html)).toContain(zhUi.illegal.mustBreak('14:30'));
+  });
+
+  it('17:00 以后只有收工还车能点；还完车以后什么都不能点，写几点还完车', () => {
+    const rested = play(world, waitUntil(world, initial(world), world.params.shift.breakEarliest), act.break());
+    const late = waitUntil(world, rested, world.params.shift.hardStop);
+    const lateHtml = renderScreen(world, late);
+    expect(buttonsIn(lateHtml)).toEqual({ restock: false, call: false, break: false, wait: false, finish: true });
+    expect(previewTextOf(lateHtml)).toContain(zhUi.illegal.afterHardStop('17:00'));
+    const forced = renderScreen(world, late, act.finish());
+    expect(previewTextOf(forced)).toContain(zhUi.preview.forced('17:00'));
+    const ended = play(world, late, act.finish());
+    const endedHtml = renderScreen(world, ended);
+    expect(buttonsIn(endedHtml)).toEqual({ restock: false, call: false, break: false, wait: false, finish: false });
+    expect(previewTextOf(endedHtml)).toContain(zhUi.preview.ended(toClock(ended.minute)));
   });
 });

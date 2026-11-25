@@ -4,15 +4,22 @@
  *
  * 从上到下：指针上方的"现在"；时限小旗的字（可能分几行）；轴（浅色带、14:30 的线、刻度、休息过的那一段、小点、指针）；
  * 刻度的钟点；最下一行是说明：还没休息时 10:30 下面写"可以休息"、14:30 下面写"只能休息"，休息过了在那一段下面写"休息"。
- * 动作预览时指针前方的虚影是"动作预览和确认"那一项的事。
+ * 预览一个合法的动作时，指针前方画一段虚影到最晚做完的时刻（docs/DESIGN.md）：到最早做完之前是实的虚线，
+ * 最早到最晚之间（打扫时间的范围）淡一些；"现在"后面接着写"预览到"最晚的时刻。
  */
 
 import { Fragment } from 'react';
 import { useText } from '../content';
 import { toClock, type Minute } from '../engine';
 import { FlagIcon } from './icons';
+import { planEnd, type Preview } from './preview';
 import type { ScreenProps } from './shift';
 import { percentOf, timelineModel, type TickRole } from './timelineModel';
+
+export interface TimelineProps extends ScreenProps {
+  /** 正在预览的动作；没有、或者不合法时不画虚影。 */
+  readonly preview?: Preview | null;
+}
 
 /** 竖直方向的布局（像素）：每一行的高度，以及最下面一行旗字和轴之间的空隙。 */
 const NOW_ROW = 24;
@@ -24,9 +31,10 @@ const NOTE_ROW = 20;
 /** "现在"那行字离轴的两端不到这个百分比时，靠这一端对齐，不居中，免得伸出时间轴。 */
 const EDGE = 10;
 
-export function Timeline({ view, params }: ScreenProps) {
+export function Timeline({ view, params, preview = null }: TimelineProps) {
   const t = useText();
-  const model = timelineModel(view, params);
+  const ghost = preview?.ok === true ? planEnd(preview.plan) : null;
+  const model = timelineModel(view, params, ghost?.to ?? null);
   const lanes = Math.max(model.lanes, 1);
   const axisY = NOW_ROW + lanes * LANE + AXIS_GAP;
   const tickY = axisY + 8;
@@ -123,10 +131,24 @@ export function Timeline({ view, params }: ScreenProps) {
           />
         ))}
 
+        {ghost !== null && (
+          <>
+            <div className="tl-ghost" style={{ left: at(model.now), width: width(model.now, ghost.from), top: axisY - 2 }} />
+            {ghost.to > ghost.from && (
+              <div
+                className="tl-ghost-range"
+                style={{ left: at(ghost.from), width: width(ghost.from, ghost.to), top: axisY - 2 }}
+              />
+            )}
+            <div className="tl-ghost-end" style={{ left: at(ghost.to), top: axisY - 6 }} />
+          </>
+        )}
+
         <div className="tl-now" style={{ left: at(model.now), top: NOW_ROW - 4, height: axisY - NOW_ROW + 10 }} />
         <div className="tl-now-dot" style={{ left: at(model.now), top: axisY - 5 }} />
         <span className={`tl-now-label is-${nowAlign}`} style={{ left: at(model.now), top: 0 }}>
           {t.timeline.now(toClock(model.now))}
+          {ghost !== null && <span className="tl-preview-label">{t.timeline.previewTo(toClock(ghost.to))}</span>}
         </span>
       </div>
     </section>

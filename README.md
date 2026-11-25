@@ -12,7 +12,7 @@ No reflexes are involved. You and the ghosts choose from the same set of actions
 
 ## Status
 
-The engine is partly built: the types, the tuning parameters, seeded world generation, the core shift rules, the player's view and scoring are in place, and so are two of the ghosts: the greedy novice and an approximate oracle, a beam search with full information that an exact solver will replace later. A batch simulator plays both ghosts on the same fixed seeds and prints an evaluation table. The main screen (timeline, floor plan, task sheet and linen cart) shows a shift as the player sees it, but actions, previews and the results screen are not wired up yet. Events during the shift and the veteran are not implemented yet.
+The engine is partly built: the types, the tuning parameters, seeded world generation, the core shift rules, the player's view and scoring are in place, and so are two of the ghosts: the greedy novice and an approximate oracle, a beam search with full information that an exact solver will replace later. A batch simulator plays both ghosts on the same fixed seeds and prints an evaluation table. The main screen (timeline, floor plan, task sheet and linen cart) shows a shift as the player sees it: pick a room or an action to preview its cost (walking time, cleaning time range, finish time, deadlines), then confirm to play it. The results screen is not built yet. Events during the shift and the veteran are not implemented yet.
 
 ## Getting started
 
